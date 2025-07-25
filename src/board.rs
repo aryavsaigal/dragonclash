@@ -5,13 +5,14 @@ pub type Bitboard = u64;
 #[derive(Clone)]
 pub struct Board {
     pub bitboards: [[Bitboard; 6]; 2],
-    turn: Colour,
+    pub turn: Colour,
     full_moves: usize,
     half_moves: usize,
     castling_rights: Castle,
     en_passant: Bitboard,
     pieces: [Option<(Colour, Pieces)>; 64],
     attack_tables: [[[Bitboard; 64]; 6]; 2],
+    move_history: Vec<(Move, Castle, Bitboard)>
 }
 
 fn file(n: usize) -> Bitboard {
@@ -50,6 +51,7 @@ impl Board {
             half_moves: 0,
             castling_rights: Castle::new(),
             en_passant: 0,
+            move_history: Vec::new()
         }
     }
 
@@ -59,15 +61,24 @@ impl Board {
         self.precompute_pawn_attacks();
     }
 
-    pub fn get_pseudo_legal_moves(&self, colour: Colour) -> Vec<Move> {
+    pub fn get_pseudo_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
         let mut moves = Vec::new();
-        for (i, mut b) in self.bitboards[colour as usize].iter().copied().enumerate() {
+        let bitboards_copy: Vec<(usize, u64)> = self.bitboards[colour as usize]
+            .iter()
+            .copied()
+            .enumerate()
+            .collect();
+
+        for (i, mut b) in bitboards_copy {
             if i == Pieces::King as usize {
                 let from = Board::pop_lsb(&mut b).unwrap();
-                let mut possible_moves = self.attack_tables[colour as usize][i][from]
-                    | self.castling_rights.colour(colour);
-                possible_moves &= !self.pieces(colour);
 
+                let is_check = self.is_check(colour);
+                let king_castle_conflicts = [self.bitboard_under_attack(WHITE_KING_CHECK, colour), self.bitboard_under_attack(WHITE_QUEEN_CHECK, colour), self.bitboard_under_attack(BLACK_KING_CHECK, colour), self.bitboard_under_attack(BLACK_QUEEN_CHECK, colour)];
+
+                let mut possible_moves = self.attack_tables[colour as usize][i][from];
+                if !is_check { possible_moves |= self.castling_rights.colour(colour, self.all_pieces(), king_castle_conflicts) };
+                possible_moves &= !self.pieces(colour);
                 while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                     moves.push(Move::new(
                         from,
@@ -75,7 +86,6 @@ impl Board {
                         (colour, Pieces::King),
                         self.pieces[to],
                         None,
-                        false,
                     ));
                 }
             } else if i == Pieces::Knight as usize {
@@ -89,7 +99,6 @@ impl Board {
                             (colour, Pieces::Knight),
                             self.pieces[to],
                             None,
-                            false,
                         ));
                     }
                 }
@@ -113,7 +122,6 @@ impl Board {
                                     (colour, Pieces::Pawn),
                                     self.pieces[to],
                                     Some(promotion),
-                                    false,
                                 ));
                             }
                         } else {
@@ -123,7 +131,6 @@ impl Board {
                                 (colour, Pieces::Pawn),
                                 self.pieces[to],
                                 None,
-                                false,
                             ));
                         }
                     }
@@ -139,7 +146,6 @@ impl Board {
                             (colour, Pieces::Rook),
                             self.pieces[to],
                             None,
-                            false,
                         ));
                     }
                 }
@@ -154,7 +160,6 @@ impl Board {
                             (colour, Pieces::Bishop),
                             self.pieces[to],
                             None,
-                            false,
                         ));
                     }
                 }
@@ -169,7 +174,6 @@ impl Board {
                             (colour, Pieces::Queen),
                             self.pieces[to],
                             None,
-                            false,
                         ));
                     }
                 }
@@ -229,8 +233,13 @@ impl Board {
     fn pawn_moves(&self, bit: Bitboard, colour: Colour) -> Bitboard {
         let mut moves = 0 as Bitboard;
         moves |= match colour {
-            Colour::White => (bit << 8 | bit << 16 & rank(3)) & !self.all_pieces(),
-            Colour::Black => (bit >> 8 | bit >> 16 & rank(4)) & !self.all_pieces(),
+            Colour::White => (bit << 8) & !self.all_pieces(),
+            Colour::Black => (bit >> 8) & !self.all_pieces(),
+        };
+
+        moves |= match colour {
+            Colour::White => (moves << 8 & rank(3)) & !self.all_pieces(),
+            Colour::Black => (moves >> 8 & rank(4)) & !self.all_pieces(),
         };
 
         moves
@@ -326,6 +335,15 @@ impl Board {
         attacks & !self.pieces(colour)
     }
 
+    pub fn bitboard_under_attack(&mut self, mut bit: Bitboard, colour: Colour) -> bool {
+        while let Some(sq) = Board::pop_lsb(&mut bit) {
+            if (self.attack_tables[!colour as usize][Pieces::Knight as usize][sq] & self.bitboards[!colour as usize][Pieces::Knight as usize]) | (self.attack_tables[colour as usize][Pieces::Pawn as usize][sq] & self.bitboards[!colour as usize][Pieces::Pawn as usize]) | (self.brute_rook_moves(sq, colour) & self.bitboards[!colour as usize][Pieces::Rook as usize]) | (self.brute_bishop_moves(sq, colour) & self.bitboards[!colour as usize][Pieces::Bishop as usize]) | ((self.brute_rook_moves(sq, colour) | self.brute_bishop_moves(sq, colour)) & self.bitboards[!colour as usize][Pieces::Queen as usize]) != 0 {
+                return true;
+            }
+        }
+        false
+    }
+
     pub fn is_check(&mut self, colour: Colour) -> bool {
         let king_sq = self.bitboards[colour as usize][Pieces::King as usize].trailing_zeros() as usize;
         (self.attack_tables[!colour as usize][Pieces::Knight as usize][king_sq] & self.bitboards[!colour as usize][Pieces::Knight as usize]) | (self.attack_tables[colour as usize][Pieces::Pawn as usize][king_sq] & self.bitboards[!colour as usize][Pieces::Pawn as usize]) | (self.brute_rook_moves(king_sq, colour) & self.bitboards[!colour as usize][Pieces::Rook as usize]) | (self.brute_bishop_moves(king_sq, colour) & self.bitboards[!colour as usize][Pieces::Bishop as usize]) | ((self.brute_rook_moves(king_sq, colour) | self.brute_bishop_moves(king_sq, colour)) & self.bitboards[!colour as usize][Pieces::Queen as usize]) != 0
@@ -335,9 +353,10 @@ impl Board {
         let pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
 
         let legal_moves: Vec<Move> = pseudo_legal_moves.iter().filter(|m| {
-            let mut board_clone = self.clone();
-            board_clone.make_move(**m, false).unwrap();
-            !board_clone.is_check(colour)
+            self.make_move(**m, false).unwrap();
+            let result = !self.is_check(colour);
+            self.unmake_move().unwrap();
+            result
 
         }).cloned().collect();
 
@@ -349,11 +368,11 @@ impl Board {
         let mut counter = 0;
 
         for m in moves {
-            let mut board_clone = self.clone();
             let mut node_counter = 0;
 
-            board_clone.make_move(m, false).unwrap();
-            board_clone.perft(!colour, depth-1, &mut node_counter);
+            self.make_move(m, false).unwrap();
+            self.perft(!colour, depth-1, &mut node_counter);
+            self.unmake_move().unwrap();
 
             println!("{}{}: {}", Board::bit_to_algebraic(1 << m.from), Board::bit_to_algebraic(1 << m.to), node_counter);
             counter += node_counter;
@@ -362,17 +381,17 @@ impl Board {
     }
 
     pub fn perft(&mut self, colour: Colour, depth: usize, counter: &mut u64) {
-        let moves = self.get_legal_moves(colour);
-
         if depth == 0 {
             *counter+=1;
             return;
         }
 
+        let moves = self.get_legal_moves(colour);
+        
         for m in moves {
-            let mut board_clone = self.clone();
-            board_clone.make_move(m, false).unwrap();
-            board_clone.perft(!colour, depth-1, counter);
+            self.make_move(m, false).unwrap();
+            self.perft(!colour, depth-1, counter);
+            self.unmake_move().unwrap();
         }
     }
 
@@ -405,11 +424,11 @@ impl Board {
         rank * 8 + file
     }
 
-    fn all_pieces(&self) -> Bitboard {
+    pub fn all_pieces(&self) -> Bitboard {
         self.white_pieces() | self.black_pieces()
     }
 
-    fn empty(&self) -> Bitboard {
+    pub fn empty(&self) -> Bitboard {
         !self.all_pieces()
     }
 
@@ -420,7 +439,7 @@ impl Board {
         }
     }
 
-    fn white_pieces(&self) -> Bitboard {
+    pub fn white_pieces(&self) -> Bitboard {
         self.bitboards[Colour::White as usize]
             .iter()
             .copied()
@@ -428,7 +447,7 @@ impl Board {
             .unwrap()
     }
 
-    fn black_pieces(&self) -> Bitboard {
+    pub fn black_pieces(&self) -> Bitboard {
         self.bitboards[Colour::Black as usize]
             .iter()
             .copied()
@@ -553,7 +572,7 @@ impl Board {
 
     pub fn display(&mut self) {
         for rank in (0..=7).rev() {
-            print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", 8 - rank);
+            print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", rank+1);
             for file in 0..=7 {
                 let symbol = match self.pieces[Board::get_bit_position(rank, file)] {
                     None => " ".to_string(),
@@ -581,7 +600,7 @@ impl Board {
 
     pub fn display_bitboard(bitboard: Bitboard) {
         for rank in (0..=7).rev() {
-            print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", 8 - rank);
+            print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", rank+1);
             for file in 0..=7 {
                 let symbol = if Board::get_bit(bitboard, rank * 8 + file) != 0 {
                     "1"
@@ -635,11 +654,11 @@ impl Board {
         } else {
             None
         };
-        // if piece.1 == Pieces::Rook { Board::display_bitboard(self.brute_rook_moves(from, piece.0)); }
-        Ok(Move::new(from, to, piece, capture, promotion, false))
+
+        Ok(Move::new(from, to, piece, capture, promotion))
     }
 
-    pub fn make_move(&mut self, m: Move, validate: bool) -> Result<(), String> {
+    pub fn make_move(&mut self, mut m: Move, validate: bool) -> Result<(), String> {
         if m.piece.0 != self.turn {
             return Err(format!("Invalid turn, it is {:?}'s move", self.turn));
         }
@@ -652,6 +671,9 @@ impl Board {
         self.pieces[m.to] = Some(m.piece);
 
         self.half_moves += 1;
+
+        let pre_castle_state = self.castling_rights.clone();
+        let old_en_passant = self.en_passant;
 
         Board::clear_bit(
             &mut self.bitboards[m.piece.0 as usize][m.piece.1 as usize],
@@ -689,18 +711,22 @@ impl Board {
                                 &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
                                 5,
                             );
+
+                            m.castle = true;
                         } else if m.to == self.castling_rights.white_queen.trailing_zeros() as usize
                         {
                             self.pieces[0] = None;
-                            self.pieces[2] = Some((Colour::White, Pieces::Rook));
+                            self.pieces[3] = Some((Colour::White, Pieces::Rook));
                             Board::clear_bit(
                                 &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
                                 0,
                             );
                             Board::set_bit(
                                 &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
-                                2,
+                                3,
                             );
+
+                            m.castle = true;
                         }
                     }
                     Colour::Black => {
@@ -715,18 +741,22 @@ impl Board {
                                 &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
                                 61,
                             );
+
+                            m.castle = true;
                         } else if m.to == self.castling_rights.black_queen.trailing_zeros() as usize
                         {
                             self.pieces[56] = None;
-                            self.pieces[58] = Some((Colour::Black, Pieces::Rook));
+                            self.pieces[59] = Some((Colour::Black, Pieces::Rook));
                             Board::clear_bit(
                                 &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
                                 56,
                             );
                             Board::set_bit(
                                 &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
-                                58,
+                                59,
                             );
+
+                            m.castle = true;
                         }
                     }
                 }
@@ -771,10 +801,13 @@ impl Board {
                             );
                         }
                     }
+                    m.en_passant = true;
                 }
             }
 
         }
+
+        self.move_history.push((m, pre_castle_state, old_en_passant));
 
         if (m.from as isize - m.to as isize).abs() == 16 && m.piece.1 == Pieces::Pawn {
             self.en_passant = (1 as Bitboard) << (m.from + m.to) / 2;
@@ -784,6 +817,89 @@ impl Board {
 
         if self.turn == Colour::Black {
             self.full_moves += 1;
+        }
+
+        self.turn = !self.turn;
+
+        Ok(())
+    }
+
+    pub fn unmake_move(&mut self) -> Result<(), String> {
+        let (last_move, old_castle, old_en_passant) = self.move_history.pop().ok_or("No move history".to_string())?;
+
+        self.castling_rights = old_castle;
+        self.half_moves -= 1;
+        self.en_passant = old_en_passant;
+
+        self.pieces[last_move.to] = None;
+        self.pieces[last_move.from] = Some(last_move.piece);
+
+        Board::clear_bit(&mut self.bitboards[last_move.piece.0 as usize][last_move.piece.1 as usize], last_move.to);
+        Board::set_bit(&mut self.bitboards[last_move.piece.0 as usize][last_move.piece.1 as usize], last_move.from);
+
+        if let Some(piece) = last_move.capture {
+            self.half_moves = 0;
+
+            self.pieces[last_move.to] = Some(piece);
+            Board::set_bit(&mut self.bitboards[piece.0 as usize][piece.1 as usize], last_move.to);
+        }
+
+        if let Some(promotion) = last_move.promotion {
+            Board::clear_bit(&mut self.bitboards[last_move.piece.0 as usize][promotion as usize], last_move.to);
+        }
+
+        if last_move.en_passant {
+            match last_move.piece.0 {
+                Colour::White => {
+                    let sq = (((1 << last_move.to) >> 8) as usize).trailing_zeros() as usize;
+                    self.pieces[sq] = Some((Colour::Black, Pieces::Pawn));
+                    Board::set_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Pawn as usize], sq);
+                },
+                Colour::Black => {
+                    let sq = (((1 << last_move.to) << 8) as usize).trailing_zeros() as usize;
+                    self.pieces[sq] = Some((Colour::White, Pieces::Pawn));
+                    Board::set_bit(&mut self.bitboards[Colour::White as usize][Pieces::Pawn as usize], sq);
+                }
+            }
+        }
+
+        if last_move.castle {
+            if last_move.to == 2 {
+                self.pieces[3] = None;
+                self.pieces[0] = Some((Colour::White, Pieces::Rook));
+
+                Board::clear_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 3);
+                Board::set_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 0);
+            }
+            else if last_move.to == 8 {
+                self.pieces[5] = None;
+                self.pieces[7] = Some((Colour::White, Pieces::Rook));
+
+                Board::clear_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 5);
+                Board::set_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 7);
+            }
+            else if last_move.to == 56 {
+                self.pieces[57] = None;
+                self.pieces[54] = Some((Colour::Black, Pieces::Rook));
+
+                Board::clear_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 57);
+                Board::set_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 54);
+            }
+            else if last_move.to == 62 {
+                self.pieces[61] = None;
+                self.pieces[63] = Some((Colour::Black, Pieces::Rook));
+
+                Board::clear_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 61);
+                Board::set_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 63);
+            }
+        }
+
+        if last_move.piece.1 == Pieces::Pawn {
+            self.half_moves = 0;
+        }
+
+        if self.turn == Colour::Black {
+            self.full_moves -= 1;
         }
 
         self.turn = !self.turn;
@@ -818,6 +934,7 @@ pub struct Move {
     capture: Option<(Colour, Pieces)>,
     promotion: Option<Pieces>,
     en_passant: bool,
+    castle: bool
 }
 
 impl Move {
@@ -827,15 +944,15 @@ impl Move {
         piece: (Colour, Pieces),
         capture: Option<(Colour, Pieces)>,
         promotion: Option<Pieces>,
-        en_passant: bool,
     ) -> Move {
         Move {
             from,
             to,
             promotion,
-            en_passant,
             capture,
             piece,
+            en_passant: false,
+            castle: false
         }
     }
 }
@@ -934,20 +1051,33 @@ struct Castle {
     black_queen: Bitboard,
 }
 
+const WHITE_KING_CHECK: Bitboard = (3 as Bitboard) << 5;
+const BLACK_KING_CHECK: Bitboard = ((3 as Bitboard) << 5 ) << 56;
+const WHITE_QUEEN_CHECK: Bitboard = (3 as Bitboard) << 2;
+const BLACK_QUEEN_CHECK: Bitboard = ((3 as Bitboard) << 2) << 56;
+const WHITE_MASK_KING: Bitboard = (3 as Bitboard) << 5;
+const WHITE_MASK_QUEEN: Bitboard = (7 as Bitboard) << 1;
+const BLACK_MASK_KING: Bitboard = ((3 as Bitboard) << 5) << 56;
+const BLACK_MASK_QUEEN: Bitboard = ((7 as Bitboard) << 1) << 56;
+
 impl Castle {
     fn new() -> Castle {
         Castle {
             white_king: (1 as Bitboard) << 6,
-            white_queen: (1 as Bitboard) << 1,
+            white_queen: (1 as Bitboard) << 2,
             black_king: (1 as Bitboard) << 62,
-            black_queen: (1 as Bitboard) << 57,
+            black_queen: (1 as Bitboard) << 58,
         }
     }
 
-    fn colour(&self, colour: Colour) -> Bitboard {
+    fn colour(&self, colour: Colour, all_pieces: Bitboard, conflicts: [bool;4]) -> Bitboard {
         match colour {
-            Colour::White => self.white_king | self.white_queen,
-            Colour::Black => self.black_king | self.black_queen,
+            Colour::White => 
+                self.white_king & (if all_pieces & WHITE_MASK_KING == 0 && !conflicts[0] { u64::MAX } else { 0 }) |
+                self.white_queen & (if all_pieces & WHITE_MASK_QUEEN == 0 && !conflicts[1] { u64::MAX } else { 0 }),
+            Colour::Black => 
+                self.black_king & (if all_pieces & BLACK_MASK_KING == 0 && !conflicts[2] { u64::MAX } else { 0 }) |
+                self.black_queen & (if all_pieces & BLACK_MASK_QUEEN == 0 && !conflicts[3] { u64::MAX } else { 0 }),
         }
     }
 
@@ -962,5 +1092,34 @@ impl Castle {
                 self.black_queen = 0;
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DEFAULT: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
+
+    #[test]
+    fn perft_test_default() {
+        let mut board = Board::new();
+        board.init();
+        board.load_fen(DEFAULT.to_string());
+
+        let mut nodes_evaluated = 0;
+        board.perft(board.turn, 5, &mut nodes_evaluated);
+        assert_eq!(nodes_evaluated, 4865609);
+    }
+
+    #[test]
+    fn perft_test_kiwipete() {
+        let mut board = Board::new();
+        board.init();
+        board.load_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string());
+
+        let mut nodes_evaluated = 0;
+        board.perft(board.turn, 4, &mut nodes_evaluated);
+        assert_eq!(nodes_evaluated, 4085603);
     }
 }
