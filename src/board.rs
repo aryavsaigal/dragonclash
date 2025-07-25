@@ -1,5 +1,7 @@
 use std::ops::Not;
 
+const MAX_MOVES: usize = 218;
+
 pub type Bitboard = u64;
 
 #[derive(Clone)]
@@ -62,7 +64,7 @@ impl Board {
     }
 
     pub fn get_pseudo_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
-        let mut moves = Vec::new();
+        let mut moves = Vec::with_capacity(MAX_MOVES);
         let bitboards_copy: Vec<(usize, u64)> = self.bitboards[colour as usize]
             .iter()
             .copied()
@@ -352,13 +354,13 @@ impl Board {
     pub fn get_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
         let pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
 
-        let legal_moves: Vec<Move> = pseudo_legal_moves.iter().filter(|m| {
-            self.make_move(**m, false).unwrap();
+        let legal_moves: Vec<Move> = pseudo_legal_moves.into_iter().filter(|m| {
+            self.make_move(*m, false).unwrap();
             let result = !self.is_check(colour);
             self.unmake_move().unwrap();
             result
 
-        }).cloned().collect();
+        }).collect();
 
         legal_moves
     }
@@ -381,12 +383,13 @@ impl Board {
     }
 
     pub fn perft(&mut self, colour: Colour, depth: usize, counter: &mut u64) {
+        let moves = self.get_legal_moves(colour);
+
         if depth == 0 {
             *counter+=1;
             return;
         }
 
-        let moves = self.get_legal_moves(colour);
         
         for m in moves {
             self.make_move(m, false).unwrap();
@@ -969,8 +972,8 @@ impl Magic {
         Magic { magic_number: 0, shift: 0, attacks: Vec::new() }
     }
 
-    fn get_index(&self, pieces: Bitboard) -> usize {
-        (pieces.wrapping_mul(self.magic_number) >> self.shift) as usize
+    fn get_attacks(&self, occ: Bitboard) -> Bitboard {
+        self.attacks[(occ.wrapping_mul(self.magic_number) >> self.shift) as usize]
     }
 }
 
