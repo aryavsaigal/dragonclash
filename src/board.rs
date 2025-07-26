@@ -10,11 +10,13 @@ pub struct Board {
     pub turn: Colour,
     full_moves: usize,
     half_moves: usize,
-    castling_rights: Castle,
+    pub castling_rights: Castle,
     en_passant: Bitboard,
     pieces: [Option<(Colour, Pieces)>; 64],
     attack_tables: [[[Bitboard; 64]; 6]; 2],
-    move_history: Vec<(Move, Castle, Bitboard)>
+    move_history: Vec<(Move, Castle, Bitboard)>,
+    rook_magic_table: Vec<Magic>,
+    bishop_magic_table: Vec<Magic>
 }
 
 fn file(n: usize) -> Bitboard {
@@ -28,7 +30,6 @@ fn files<I: IntoIterator<Item = usize>>(c: I) -> Bitboard {
     }
     result
 }
-
 
 fn rank(n: usize) -> Bitboard {
     (0xFF as Bitboard) << (8 * n)
@@ -53,7 +54,9 @@ impl Board {
             half_moves: 0,
             castling_rights: Castle::new(),
             en_passant: 0,
-            move_history: Vec::new()
+            move_history: Vec::new(),
+            rook_magic_table: Vec::with_capacity(64),
+            bishop_magic_table: Vec::with_capacity(64),
         }
     }
 
@@ -61,6 +64,8 @@ impl Board {
         self.precompute_king_attacks();
         self.precompute_knight_attacks();
         self.precompute_pawn_attacks();
+        self.generate_magic_table_rook();
+        self.generate_magic_table_bishop();
     }
 
     pub fn get_pseudo_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
@@ -76,10 +81,21 @@ impl Board {
                 let from = Board::pop_lsb(&mut b).unwrap();
 
                 let is_check = self.is_check(colour);
-                let king_castle_conflicts = [self.bitboard_under_attack(WHITE_KING_CHECK, colour), self.bitboard_under_attack(WHITE_QUEEN_CHECK, colour), self.bitboard_under_attack(BLACK_KING_CHECK, colour), self.bitboard_under_attack(BLACK_QUEEN_CHECK, colour)];
+                let king_castle_conflicts = [
+                    self.bitboard_under_attack(WHITE_KING_CHECK, colour),
+                    self.bitboard_under_attack(WHITE_QUEEN_CHECK, colour),
+                    self.bitboard_under_attack(BLACK_KING_CHECK, colour),
+                    self.bitboard_under_attack(BLACK_QUEEN_CHECK, colour),
+                ];
 
                 let mut possible_moves = self.attack_tables[colour as usize][i][from];
-                if !is_check { possible_moves |= self.castling_rights.colour(colour, self.all_pieces(), king_castle_conflicts) };
+                if !is_check {
+                    possible_moves |= self.castling_rights.colour(
+                        colour,
+                        self.all_pieces(),
+                        king_castle_conflicts,
+                    )
+                };
                 possible_moves &= !self.pieces(colour);
                 while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                     moves.push(Move::new(
@@ -110,7 +126,7 @@ impl Board {
 
                     possible_moves &= self.pieces(!colour) | self.en_passant;
                     possible_moves |= self.pawn_moves((1 as Bitboard) << from, colour);
- 
+
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         if to / 8 == 7 && colour == Colour::White
                             || to / 8 == 0 && colour == Colour::Black
@@ -137,10 +153,10 @@ impl Board {
                         }
                     }
                 }
-            }
-            else if i == Pieces::Rook as usize {
+            } else if i == Pieces::Rook as usize {
                 while let Some(from) = Board::pop_lsb(&mut b) {
-                    let mut possible_moves = self.brute_rook_moves(from, colour);
+                    let index = self.rook_magic_table[from].get_index(self.all_pieces() & self.rook_magic_table[from].mask);
+                    let mut possible_moves = self.rook_magic_table[from].attacks[index].unwrap() & !self.pieces(colour);
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         moves.push(Move::new(
                             from,
@@ -151,10 +167,10 @@ impl Board {
                         ));
                     }
                 }
-            }
-            else if i == Pieces::Bishop as usize {
+            } else if i == Pieces::Bishop as usize {
                 while let Some(from) = Board::pop_lsb(&mut b) {
-                    let mut possible_moves = self.brute_bishop_moves(from, colour);
+                    let index = self.bishop_magic_table[from].get_index(self.all_pieces() & self.bishop_magic_table[from].mask);
+                    let mut possible_moves = self.bishop_magic_table[from].attacks[index].unwrap() & !self.pieces(colour);
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         moves.push(Move::new(
                             from,
@@ -165,10 +181,11 @@ impl Board {
                         ));
                     }
                 }
-            }
-            else if i == Pieces::Queen as usize {
+            } else if i == Pieces::Queen as usize {
                 while let Some(from) = Board::pop_lsb(&mut b) {
-                    let mut possible_moves = self.brute_rook_moves(from, colour) | self.brute_bishop_moves(from, colour);
+                    let index_r = self.rook_magic_table[from].get_index(self.all_pieces() & self.rook_magic_table[from].mask);
+                    let index_b = self.bishop_magic_table[from].get_index(self.all_pieces() & self.bishop_magic_table[from].mask);
+                    let mut possible_moves = (self.rook_magic_table[from].attacks[index_r].unwrap() | self.bishop_magic_table[from].attacks[index_b].unwrap()) & !self.pieces(colour);
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         moves.push(Move::new(
                             from,
@@ -247,99 +264,144 @@ impl Board {
         moves
     }
 
-    fn brute_rook_moves(&self, sq: usize, colour: Colour) -> Bitboard {
+    fn magic_rook_moves(sq: usize, occ: Bitboard) -> Bitboard {
         let mut attacks = 0 as Bitboard;
-        let rook = (1_u64 << sq) as Bitboard; 
-        let all_pieces = self.all_pieces();
+        let rook = (1_u64 << sq) as Bitboard;
 
         for c in 1..=7 {
             let possible_move = rook << 8 * c;
-            if possible_move == 0 { break; }
+            if possible_move == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
 
         for c in 1..=7 {
             let possible_move = rook >> 8 * c;
-            if possible_move == 0 { break; }
+            if possible_move == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
 
         for c in 1..=7 {
             let possible_move = rook << c;
-            if possible_move & rank(sq / 8) == 0 { break; }
+            if possible_move & rank(sq / 8) == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
 
         for c in 1..=7 {
             let possible_move = rook >> c;
-            if possible_move & rank(sq / 8) == 0 { break; }
+            if possible_move & rank(sq / 8) == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
-        
 
-        attacks & !self.pieces(colour)
+        attacks
     }
 
-    fn brute_bishop_moves(&self, sq: usize, colour: Colour) -> Bitboard {
+    fn magic_bishop_moves(sq: usize, occ: Bitboard) -> Bitboard {
         let mut attacks = 0 as Bitboard;
-        let bishop = (1_u64 << sq) as Bitboard; 
-        let all_pieces = self.all_pieces();
+        let bishop = (1_u64 << sq) as Bitboard;
 
         for c in 1..=7 {
             let possible_move = bishop << 9 * c;
-            if possible_move & files((sq%8)..=7) == 0 { break; }
+            if possible_move & files((sq % 8)..=7) == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
 
         for c in 1..=7 {
             let possible_move = bishop >> 9 * c;
-            if possible_move & files(0..=(sq%8)) == 0 { break; }
+            if possible_move & files(0..=(sq % 8)) == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
 
         for c in 1..=7 {
             let possible_move = bishop << 7 * c;
-            if possible_move & files(0..=(sq%8)) == 0 { break; }
+            if possible_move & files(0..=(sq % 8)) == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
 
         for c in 1..=7 {
-            let possible_move = bishop >> 7 * c ;
-            if possible_move & files((sq%8)..=7) == 0 { break; }
+            let possible_move = bishop >> 7 * c;
+            if possible_move & files((sq % 8)..=7) == 0 {
+                break;
+            }
 
             attacks |= possible_move;
 
-            if possible_move & all_pieces != 0 { break; }
+            if possible_move & occ != 0 {
+                break;
+            }
         }
-        
 
-        attacks & !self.pieces(colour)
+        attacks
     }
 
     pub fn bitboard_under_attack(&mut self, mut bit: Bitboard, colour: Colour) -> bool {
         while let Some(sq) = Board::pop_lsb(&mut bit) {
-            if (self.attack_tables[!colour as usize][Pieces::Knight as usize][sq] & self.bitboards[!colour as usize][Pieces::Knight as usize]) | (self.attack_tables[colour as usize][Pieces::Pawn as usize][sq] & self.bitboards[!colour as usize][Pieces::Pawn as usize]) | (self.brute_rook_moves(sq, colour) & self.bitboards[!colour as usize][Pieces::Rook as usize]) | (self.brute_bishop_moves(sq, colour) & self.bitboards[!colour as usize][Pieces::Bishop as usize]) | ((self.brute_rook_moves(sq, colour) | self.brute_bishop_moves(sq, colour)) & self.bitboards[!colour as usize][Pieces::Queen as usize]) != 0 {
+            let rook_index = self.rook_magic_table[sq].get_index(self.all_pieces() & self.rook_magic_table[sq].mask);
+            let rook_moves = self.rook_magic_table[sq].attacks[rook_index].unwrap() & self.pieces(!colour);
+
+            let bishop_index = self.bishop_magic_table[sq].get_index(self.all_pieces() & self.bishop_magic_table[sq].mask);
+            let bishop_moves = self.bishop_magic_table[sq].attacks[bishop_index].unwrap() & self.pieces(!colour);
+
+            if (self.attack_tables[!colour as usize][Pieces::Knight as usize][sq]
+                & self.bitboards[!colour as usize][Pieces::Knight as usize])
+                | (self.attack_tables[colour as usize][Pieces::Pawn as usize][sq]
+                    & self.bitboards[!colour as usize][Pieces::Pawn as usize])
+                | (rook_moves
+                    & self.bitboards[!colour as usize][Pieces::Rook as usize])
+                | (bishop_moves
+                    & self.bitboards[!colour as usize][Pieces::Bishop as usize])
+                | ((rook_moves | bishop_moves)
+                    & self.bitboards[!colour as usize][Pieces::Queen as usize])
+                != 0
+            {
                 return true;
             }
         }
@@ -348,19 +410,38 @@ impl Board {
 
     pub fn is_check(&mut self, colour: Colour) -> bool {
         let king_sq = self.bitboards[colour as usize][Pieces::King as usize].trailing_zeros() as usize;
-        (self.attack_tables[!colour as usize][Pieces::Knight as usize][king_sq] & self.bitboards[!colour as usize][Pieces::Knight as usize]) | (self.attack_tables[colour as usize][Pieces::Pawn as usize][king_sq] & self.bitboards[!colour as usize][Pieces::Pawn as usize]) | (self.brute_rook_moves(king_sq, colour) & self.bitboards[!colour as usize][Pieces::Rook as usize]) | (self.brute_bishop_moves(king_sq, colour) & self.bitboards[!colour as usize][Pieces::Bishop as usize]) | ((self.brute_rook_moves(king_sq, colour) | self.brute_bishop_moves(king_sq, colour)) & self.bitboards[!colour as usize][Pieces::Queen as usize]) != 0
+
+        let rook_index = self.rook_magic_table[king_sq].get_index(self.all_pieces() & self.rook_magic_table[king_sq].mask);
+        let rook_moves = self.rook_magic_table[king_sq].attacks[rook_index].unwrap() & self.pieces(!colour);
+
+        let bishop_index = self.bishop_magic_table[king_sq].get_index(self.all_pieces() & self.bishop_magic_table[king_sq].mask);
+        let bishop_moves = self.bishop_magic_table[king_sq].attacks[bishop_index].unwrap() & self.pieces(!colour);
+
+        (self.attack_tables[!colour as usize][Pieces::Knight as usize][king_sq]
+            & self.bitboards[!colour as usize][Pieces::Knight as usize])
+            | (self.attack_tables[colour as usize][Pieces::Pawn as usize][king_sq]
+                & self.bitboards[!colour as usize][Pieces::Pawn as usize])
+            | (rook_moves
+                & self.bitboards[!colour as usize][Pieces::Rook as usize])
+            | (bishop_moves
+                & self.bitboards[!colour as usize][Pieces::Bishop as usize])
+            | ((rook_moves | bishop_moves)
+                & self.bitboards[!colour as usize][Pieces::Queen as usize])
+            != 0
     }
 
     pub fn get_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
         let pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
 
-        let legal_moves: Vec<Move> = pseudo_legal_moves.into_iter().filter(|m| {
-            self.make_move(*m, false).unwrap();
-            let result = !self.is_check(colour);
-            self.unmake_move().unwrap();
-            result
-
-        }).collect();
+        let legal_moves: Vec<Move> = pseudo_legal_moves
+            .into_iter()
+            .filter(|m| {
+                self.make_move(*m, false).unwrap();
+                let result = !self.is_check(colour);
+                self.unmake_move().unwrap();
+                result
+            })
+            .collect();
 
         legal_moves
     }
@@ -373,28 +454,112 @@ impl Board {
             let mut node_counter = 0;
 
             self.make_move(m, false).unwrap();
-            self.perft(!colour, depth-1, &mut node_counter);
+            self.perft(!colour, depth - 1, &mut node_counter);
             self.unmake_move().unwrap();
 
-            println!("{}{}: {}", Board::bit_to_algebraic(1 << m.from), Board::bit_to_algebraic(1 << m.to), node_counter);
+            println!(
+                "{}{}: {}",
+                Board::bit_to_algebraic(1 << m.from),
+                Board::bit_to_algebraic(1 << m.to),
+                node_counter
+            );
             counter += node_counter;
         }
         println!("Total: {}", counter);
     }
 
-    pub fn perft(&mut self, colour: Colour, depth: usize, counter: &mut u64) {
-        let moves = self.get_legal_moves(colour);
+    pub fn move_history_to_algebraic(&self) -> String {
+        let mut h = String::new();
+        for (i, history) in self.move_history.iter().enumerate() {
+            h = format!("{}{}. {}{}\n", h, i+1, Board::bit_to_algebraic(1u64 << history.0.from), Board::bit_to_algebraic(1u64 << history.0.to));
+        }
+        h
+    }
 
+    pub fn perft(&mut self, colour: Colour, depth: usize, counter: &mut u64) {
         if depth == 0 {
-            *counter+=1;
+            *counter += 1;
             return;
         }
-
         
+        let moves = self.get_legal_moves(colour);
+
         for m in moves {
             self.make_move(m, false).unwrap();
-            self.perft(!colour, depth-1, counter);
+            self.perft(!colour, depth - 1, counter);
             self.unmake_move().unwrap();
+        }
+    }
+
+    fn generate_magic_table_rook(&mut self) {
+        for sq in 0..=63 {
+            let mask = Board::rook_mask(sq);
+            let occupancies = Board::generate_blocker_permutation(mask);
+            let mut magic = Magic::new();
+            magic.shift = (64 - mask.count_ones() ) as usize;
+            magic.mask = mask;
+
+            loop {
+                magic.magic_number = rand_u64();
+                magic.attacks = [None; 4096];
+                let mut fail = false;
+
+                for &occ in &occupancies {
+                    let index = magic.get_index(occ);
+                    let attack = Board::magic_rook_moves(sq, occ);
+
+                    if let Some(existing) = magic.attacks[index] {
+                        if existing != attack {
+                            fail = true;
+                            break;
+                        }
+                    } else {
+                        magic.attacks[index] = Some(attack);
+                    }
+                }
+
+                if !fail {
+                    break;
+                }
+            }
+
+            self.rook_magic_table.push(magic);
+        }
+    }
+
+    fn generate_magic_table_bishop(&mut self) {
+        for sq in 0..=63 {
+            let mask = Board::bishop_mask(sq);
+            let occupancies = Board::generate_blocker_permutation(mask);
+            let mut magic = Magic::new();
+            magic.shift = (64 - mask.count_ones() ) as usize;
+            magic.mask = mask;
+
+            loop {
+                magic.magic_number = rand_u64();
+                magic.attacks = [None; 4096];
+                let mut fail = false;
+
+                for &occ in &occupancies {
+                    let index = magic.get_index(occ);
+                    let attack = Board::magic_bishop_moves(sq, occ);
+
+                    if let Some(existing) = magic.attacks[index] {
+                        if existing != attack {
+                            fail = true;
+                            break;
+                        }
+                    } else {
+                        magic.attacks[index] = Some(attack);
+                    }
+                }
+
+                if !fail {
+                    break;
+                }
+            }
+
+            self.bishop_magic_table.push(magic);
         }
     }
 
@@ -416,11 +581,48 @@ impl Board {
         occupancies
     }
 
-    fn rook_mask(sq: usize) -> Bitboard {
-        let r = sq / 8;
-        let f = sq % 8;
+    pub fn rook_mask(sq: usize) -> Bitboard {
+        let rank = sq / 8;
+        let file = sq % 8;
+        let mut mask = 0u64;
 
-        file(f) | rank(r)
+        // Horizontal moves (exclude edges)
+        for f in (file + 1)..7 {
+            mask |= 1u64 << (rank * 8 + f);
+        }
+        for f in (1..file).rev() {
+            mask |= 1u64 << (rank * 8 + f);
+        }
+
+        // Vertical moves (exclude edges)
+        for r in (rank + 1)..7 {
+            mask |= 1u64 << (r * 8 + file);
+        }
+        for r in (1..rank).rev() {
+            mask |= 1u64 << (r * 8 + file);
+        }
+
+        mask
+    }
+
+    pub fn bishop_mask(sq: usize) -> u64 {
+        let rank = sq / 8;
+        let file = sq % 8;
+        let mut mask = 0u64;
+        let directions = [(1, 1), (1, -1), (-1, 1), (-1, -1)];
+
+        for (dr, df) in directions {
+            let mut r = rank as i32 + dr;
+            let mut f = file as i32 + df;
+
+            // exclude edges → r>0 && r<7 && f>0 && f<7
+            while r > 0 && r < 7 && f > 0 && f < 7 {
+                mask |= 1u64 << (r * 8 + f);
+                r += dr;
+                f += df;
+            }
+        }
+        mask
     }
 
     fn get_bit_position(rank: usize, file: usize) -> usize {
@@ -502,7 +704,6 @@ impl Board {
         let rank = ((sq % 8) as u8 + b'a') as char;
         let file = sq / 8 + 1;
         format!("{}{}", rank, file)
-
     }
 
     pub fn load_fen(&mut self, fen: String) {
@@ -575,12 +776,45 @@ impl Board {
 
     pub fn display(&mut self) {
         for rank in (0..=7).rev() {
-            print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", rank+1);
+            print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", rank + 1);
             for file in 0..=7 {
                 let symbol = match self.pieces[Board::get_bit_position(rank, file)] {
                     None => " ".to_string(),
                     Some((colour, piece)) => colour.symbol().to_string() + piece.symbol(),
                 };
+
+                print!(
+                    "{}{} \x1b[0m",
+                    if (file % 2 == 0) ^ (rank % 2 == 0) {
+                        "\x1b[48;5;250m"
+                    } else {
+                        "\x1b[48;5;240m"
+                    },
+                    symbol
+                );
+            }
+            println!();
+        }
+        print!("\x1b[38;5;15m\x1b[48;5;236m ");
+        for c in 'a'..='h' {
+            print!("\x1b[38;5;15m\x1b[48;5;236m {}\x1b[0m", c);
+        }
+        println!();
+    }
+
+    pub fn display_from_bitboards(&mut self) {
+        for rank in (0..=7).rev() {
+            print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", rank + 1);
+            for file in 0..=7 {
+                let mut symbol= " ".to_string();
+                for (colour, i) in self.bitboards.iter().enumerate() {
+                    for (piece, j) in i.iter().enumerate() {
+                        if Board::get_bit(*j, Board::get_bit_position(rank, file)) == 1 {
+                            symbol = Colour::from_num(colour).unwrap().symbol().to_string() + Pieces::from_num(piece).unwrap().symbol();
+                            break;
+                        }
+                    }
+                }
 
                 print!(
                     "{}{} \x1b[0m",
@@ -627,6 +861,16 @@ impl Board {
             print!("\x1b[38;5;15m\x1b[48;5;236m {}\x1b[0m", c);
         }
         println!();
+    }
+
+    pub fn find_bitboard(&self, bit_position: usize, colour: Colour) -> Option<Pieces> {
+        for (piece, bit) in self.bitboards[colour as usize].iter().enumerate() {
+            if Board::get_bit(*bit, bit_position) != 0 {
+                return Some(Pieces::from_num(piece).unwrap())
+            }
+        }
+
+        None
     }
 
     pub fn move_parser(&mut self, m: String) -> Result<Move, String> {
@@ -807,10 +1051,10 @@ impl Board {
                     m.en_passant = true;
                 }
             }
-
         }
 
-        self.move_history.push((m, pre_castle_state, old_en_passant));
+        self.move_history
+            .push((m, pre_castle_state, old_en_passant));
 
         if (m.from as isize - m.to as isize).abs() == 16 && m.piece.1 == Pieces::Pawn {
             self.en_passant = (1 as Bitboard) << (m.from + m.to) / 2;
@@ -828,40 +1072,61 @@ impl Board {
     }
 
     pub fn unmake_move(&mut self) -> Result<(), String> {
-        let (last_move, old_castle, old_en_passant) = self.move_history.pop().ok_or("No move history".to_string())?;
+        let (last_move, old_castle, old_en_passant) = self
+            .move_history
+            .pop()
+            .ok_or("No move history".to_string())?;
 
         self.castling_rights = old_castle;
-        self.half_moves -= 1;
+        if self.half_moves > 0 { self.half_moves -= 1 };
         self.en_passant = old_en_passant;
 
         self.pieces[last_move.to] = None;
         self.pieces[last_move.from] = Some(last_move.piece);
 
-        Board::clear_bit(&mut self.bitboards[last_move.piece.0 as usize][last_move.piece.1 as usize], last_move.to);
-        Board::set_bit(&mut self.bitboards[last_move.piece.0 as usize][last_move.piece.1 as usize], last_move.from);
+        Board::clear_bit(
+            &mut self.bitboards[last_move.piece.0 as usize][last_move.piece.1 as usize],
+            last_move.to,
+        );
+        Board::set_bit(
+            &mut self.bitboards[last_move.piece.0 as usize][last_move.piece.1 as usize],
+            last_move.from,
+        );
 
         if let Some(piece) = last_move.capture {
             self.half_moves = 0;
 
             self.pieces[last_move.to] = Some(piece);
-            Board::set_bit(&mut self.bitboards[piece.0 as usize][piece.1 as usize], last_move.to);
+            Board::set_bit(
+                &mut self.bitboards[piece.0 as usize][piece.1 as usize],
+                last_move.to,
+            );
         }
 
         if let Some(promotion) = last_move.promotion {
-            Board::clear_bit(&mut self.bitboards[last_move.piece.0 as usize][promotion as usize], last_move.to);
+            Board::clear_bit(
+                &mut self.bitboards[last_move.piece.0 as usize][promotion as usize],
+                last_move.to,
+            );
         }
 
         if last_move.en_passant {
             match last_move.piece.0 {
                 Colour::White => {
-                    let sq = (((1 << last_move.to) >> 8) as usize).trailing_zeros() as usize;
+                    let sq = last_move.to - 8;
                     self.pieces[sq] = Some((Colour::Black, Pieces::Pawn));
-                    Board::set_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Pawn as usize], sq);
-                },
+                    Board::set_bit(
+                        &mut self.bitboards[Colour::Black as usize][Pieces::Pawn as usize],
+                        sq,
+                    );
+                }
                 Colour::Black => {
-                    let sq = (((1 << last_move.to) << 8) as usize).trailing_zeros() as usize;
+                    let sq = last_move.to + 8;
                     self.pieces[sq] = Some((Colour::White, Pieces::Pawn));
-                    Board::set_bit(&mut self.bitboards[Colour::White as usize][Pieces::Pawn as usize], sq);
+                    Board::set_bit(
+                        &mut self.bitboards[Colour::White as usize][Pieces::Pawn as usize],
+                        sq,
+                    );
                 }
             }
         }
@@ -871,29 +1136,50 @@ impl Board {
                 self.pieces[3] = None;
                 self.pieces[0] = Some((Colour::White, Pieces::Rook));
 
-                Board::clear_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 3);
-                Board::set_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 0);
-            }
-            else if last_move.to == 8 {
+                Board::clear_bit(
+                    &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
+                    3,
+                );
+                Board::set_bit(
+                    &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
+                    0,
+                );
+            } else if last_move.to == 6 {
                 self.pieces[5] = None;
                 self.pieces[7] = Some((Colour::White, Pieces::Rook));
 
-                Board::clear_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 5);
-                Board::set_bit(&mut self.bitboards[Colour::White as usize][Pieces::Rook as usize], 7);
-            }
-            else if last_move.to == 56 {
-                self.pieces[57] = None;
-                self.pieces[54] = Some((Colour::Black, Pieces::Rook));
+                Board::clear_bit(
+                    &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
+                    5,
+                );
+                Board::set_bit(
+                    &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
+                    7,
+                );
+            } else if last_move.to == 58 {
+                self.pieces[59] = None;
+                self.pieces[56] = Some((Colour::Black, Pieces::Rook));
 
-                Board::clear_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 57);
-                Board::set_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 54);
-            }
-            else if last_move.to == 62 {
+                Board::clear_bit(
+                    &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
+                    59,
+                );
+                Board::set_bit(
+                    &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
+                    56,
+                );
+            } else if last_move.to == 62 {
                 self.pieces[61] = None;
                 self.pieces[63] = Some((Colour::Black, Pieces::Rook));
 
-                Board::clear_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 61);
-                Board::set_bit(&mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize], 63);
+                Board::clear_bit(
+                    &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
+                    61,
+                );
+                Board::set_bit(
+                    &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
+                    63,
+                );
             }
         }
 
@@ -902,7 +1188,7 @@ impl Board {
         }
 
         if self.turn == Colour::Black {
-            self.full_moves -= 1;
+            if self.full_moves > 0 { self.full_moves -= 1 };
         }
 
         self.turn = !self.turn;
@@ -929,6 +1215,13 @@ fn map_char(c: char) -> (Colour, Pieces) {
     }
 }
 
+fn rand_u64() -> u64 {
+    use rand::Rng;
+
+    let mut rng = rand::rng();
+    rng.random::<u64>() & rng.random::<u64>() & rng.random::<u64>()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Move {
     from: usize,
@@ -937,7 +1230,7 @@ pub struct Move {
     capture: Option<(Colour, Pieces)>,
     promotion: Option<Pieces>,
     en_passant: bool,
-    castle: bool
+    castle: bool,
 }
 
 impl Move {
@@ -955,7 +1248,7 @@ impl Move {
             capture,
             piece,
             en_passant: false,
-            castle: false
+            castle: false,
         }
     }
 }
@@ -964,16 +1257,22 @@ impl Move {
 pub struct Magic {
     magic_number: Bitboard,
     shift: usize,
-    attacks: Vec<Bitboard>
+    attacks: [Option<Bitboard>; 4096],
+    mask: Bitboard
 }
 
 impl Magic {
     fn new() -> Magic {
-        Magic { magic_number: 0, shift: 0, attacks: Vec::new() }
+        Magic {
+            magic_number: 0,
+            shift: 0,
+            attacks: [None; 4096],
+            mask: 0,
+        }
     }
 
-    fn get_attacks(&self, occ: Bitboard) -> Bitboard {
-        self.attacks[(occ.wrapping_mul(self.magic_number) >> self.shift) as usize]
+    fn get_index(&self, occ: Bitboard) -> usize {
+        (occ.wrapping_mul(self.magic_number) >> self.shift) as usize
     }
 }
 
@@ -1047,15 +1346,15 @@ impl Not for Colour {
 }
 
 #[derive(Clone)]
-struct Castle {
-    white_king: Bitboard,
-    white_queen: Bitboard,
-    black_king: Bitboard,
-    black_queen: Bitboard,
+pub struct Castle {
+    pub white_king: Bitboard,
+    pub white_queen: Bitboard,
+    pub black_king: Bitboard,
+    pub black_queen: Bitboard,
 }
 
 const WHITE_KING_CHECK: Bitboard = (3 as Bitboard) << 5;
-const BLACK_KING_CHECK: Bitboard = ((3 as Bitboard) << 5 ) << 56;
+const BLACK_KING_CHECK: Bitboard = ((3 as Bitboard) << 5) << 56;
 const WHITE_QUEEN_CHECK: Bitboard = (3 as Bitboard) << 2;
 const BLACK_QUEEN_CHECK: Bitboard = ((3 as Bitboard) << 2) << 56;
 const WHITE_MASK_KING: Bitboard = (3 as Bitboard) << 5;
@@ -1073,14 +1372,36 @@ impl Castle {
         }
     }
 
-    fn colour(&self, colour: Colour, all_pieces: Bitboard, conflicts: [bool;4]) -> Bitboard {
+    fn colour(&self, colour: Colour, all_pieces: Bitboard, conflicts: [bool; 4]) -> Bitboard {
         match colour {
-            Colour::White => 
-                self.white_king & (if all_pieces & WHITE_MASK_KING == 0 && !conflicts[0] { u64::MAX } else { 0 }) |
-                self.white_queen & (if all_pieces & WHITE_MASK_QUEEN == 0 && !conflicts[1] { u64::MAX } else { 0 }),
-            Colour::Black => 
-                self.black_king & (if all_pieces & BLACK_MASK_KING == 0 && !conflicts[2] { u64::MAX } else { 0 }) |
-                self.black_queen & (if all_pieces & BLACK_MASK_QUEEN == 0 && !conflicts[3] { u64::MAX } else { 0 }),
+            Colour::White => {
+                self.white_king
+                    & (if all_pieces & WHITE_MASK_KING == 0 && !conflicts[0] {
+                        u64::MAX
+                    } else {
+                        0
+                    })
+                    | self.white_queen
+                        & (if all_pieces & WHITE_MASK_QUEEN == 0 && !conflicts[1] {
+                            u64::MAX
+                        } else {
+                            0
+                        })
+            }
+            Colour::Black => {
+                self.black_king
+                    & (if all_pieces & BLACK_MASK_KING == 0 && !conflicts[2] {
+                        u64::MAX
+                    } else {
+                        0
+                    })
+                    | self.black_queen
+                        & (if all_pieces & BLACK_MASK_QUEEN == 0 && !conflicts[3] {
+                            u64::MAX
+                        } else {
+                            0
+                        })
+            }
         }
     }
 
@@ -1119,7 +1440,9 @@ mod tests {
     fn perft_test_kiwipete() {
         let mut board = Board::new();
         board.init();
-        board.load_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string());
+        board.load_fen(
+            "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string(),
+        );
 
         let mut nodes_evaluated = 0;
         board.perft(board.turn, 4, &mut nodes_evaluated);
