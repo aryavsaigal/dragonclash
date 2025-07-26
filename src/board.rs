@@ -10,7 +10,7 @@ pub struct Board {
     pub turn: Colour,
     full_moves: usize,
     half_moves: usize,
-    pub castling_rights: Castle,
+    castling_rights: Castle,
     en_passant: Bitboard,
     pieces: [Option<(Colour, Pieces)>; 64],
     attack_tables: [[[Bitboard; 64]; 6]; 2],
@@ -49,7 +49,7 @@ fn ranks<I: IntoIterator<Item = usize>>(c: I) -> Bitboard {
 
 impl Board {
     pub fn new() -> Board {
-        Board {
+        let mut b = Board {
             bitboards: [[0; 6]; 2],
             attack_tables: [[[0; 64]; 6]; 2],
             pieces: [None; 64],
@@ -61,10 +61,13 @@ impl Board {
             move_history: Vec::new(),
             rook_magic_table: Vec::with_capacity(64),
             bishop_magic_table: Vec::with_capacity(64),
-        }
+        };
+        b.init();
+
+        b
     }
 
-    pub fn init(&mut self) {
+    fn init(&mut self) {
         self.precompute_king_attacks();
         self.precompute_knight_attacks();
         self.precompute_pawn_attacks();
@@ -450,7 +453,7 @@ impl Board {
         legal_moves
     }
 
-    pub fn verbose_perft(&mut self, colour: Colour, depth: usize) {
+    pub fn verbose_perft(&mut self, colour: Colour, depth: usize){
         let moves = self.get_legal_moves(colour);
         let mut counter = 0;
 
@@ -1208,6 +1211,21 @@ impl Board {
 
         Ok(())
     }
+
+    pub fn get_game_state(&mut self, validate_no_moves: bool) -> State {
+        if validate_no_moves {
+            if self.get_legal_moves(self.turn).len() != 0 { return State::Continue }
+        }
+        if self.is_check(Colour::White) {
+            return State::Checkmate(Colour::White);
+        }
+        else if self.is_check(Colour::Black) {
+            return State::Checkmate(Colour::Black);
+        }
+        else {
+            return State::Stalemate;
+        }
+    }
 }
 
 fn map_char(c: char) -> (Colour, Pieces) {
@@ -1300,7 +1318,7 @@ pub enum Pieces {
 }
 
 impl Pieces {
-    fn from_num(num: usize) -> Option<Pieces> {
+    pub fn from_num(num: usize) -> Option<Pieces> {
         match num {
             0 => Some(Pieces::Pawn),
             1 => Some(Pieces::Bishop),
@@ -1312,7 +1330,7 @@ impl Pieces {
         }
     }
 
-    fn symbol(&self) -> &str {
+    pub fn symbol(&self) -> &str {
         match self {
             Pieces::Rook => "♜",
             Pieces::Bishop => "♝",
@@ -1430,6 +1448,13 @@ impl Castle {
             }
         };
     }
+}
+
+pub enum State {
+    Checkmate(Colour),
+    Stalemate,
+    Draw,
+    Continue
 }
 
 #[cfg(test)]
