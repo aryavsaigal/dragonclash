@@ -11,10 +11,10 @@ const DEFAULT: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 fn main() {
     let mut board = Board::new();
     board.init();
-    board.load_fen("r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1".to_string());
+    board.load_fen(DEFAULT.to_string());
     let mut error_message = String::new();
     let start = Instant::now();
-    board.verbose_perft(board.turn, 5);
+    board.verbose_perft(board.turn, 6);
     let duration = start.elapsed();
     println!("time taken: {:?}", duration);
     

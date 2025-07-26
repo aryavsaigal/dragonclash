@@ -19,10 +19,12 @@ pub struct Board {
     bishop_magic_table: Vec<Magic>
 }
 
+#[inline]
 fn file(n: usize) -> Bitboard {
     (0x0101010101010101 as Bitboard) << n
 }
 
+#[inline]
 fn files<I: IntoIterator<Item = usize>>(c: I) -> Bitboard {
     let mut result = 0;
     for i in c {
@@ -31,10 +33,12 @@ fn files<I: IntoIterator<Item = usize>>(c: I) -> Bitboard {
     result
 }
 
+#[inline]
 fn rank(n: usize) -> Bitboard {
     (0xFF as Bitboard) << (8 * n)
 }
 
+#[inline]
 fn ranks<I: IntoIterator<Item = usize>>(c: I) -> Bitboard {
     let mut result = 0;
     for i in c {
@@ -430,18 +434,18 @@ impl Board {
             != 0
     }
 
+    #[inline]
     pub fn get_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
         let pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
+        let mut legal_moves = Vec::with_capacity(MAX_MOVES);
 
-        let legal_moves: Vec<Move> = pseudo_legal_moves
-            .into_iter()
-            .filter(|m| {
+        for m in &pseudo_legal_moves {
                 self.make_move(*m, false).unwrap();
-                let result = !self.is_check(colour);
+                if !self.is_check(colour) {
+                    legal_moves.push(*m);
+                }
                 self.unmake_move().unwrap();
-                result
-            })
-            .collect();
+        }
 
         legal_moves
     }
@@ -468,13 +472,13 @@ impl Board {
         println!("Total: {}", counter);
     }
 
-    pub fn move_history_to_algebraic(&self) -> String {
-        let mut h = String::new();
-        for (i, history) in self.move_history.iter().enumerate() {
-            h = format!("{}{}. {}{}\n", h, i+1, Board::bit_to_algebraic(1u64 << history.0.from), Board::bit_to_algebraic(1u64 << history.0.to));
-        }
-        h
-    }
+    // pub fn move_history_to_algebraic(&self) -> String {
+    //     let mut h = String::new();
+    //     for (i, history) in self.move_history.iter().enumerate() {
+    //         h = format!("{}{}. {}{}\n", h, i+1, Board::bit_to_algebraic(1u64 << history.0.from), Board::bit_to_algebraic(1u64 << history.0.to));
+    //     }
+    //     h
+    // }
 
     pub fn perft(&mut self, colour: Colour, depth: usize, counter: &mut u64) {
         if depth == 0 {
@@ -625,18 +629,22 @@ impl Board {
         mask
     }
 
+    #[inline]
     fn get_bit_position(rank: usize, file: usize) -> usize {
         rank * 8 + file
     }
 
+    #[inline]
     pub fn all_pieces(&self) -> Bitboard {
         self.white_pieces() | self.black_pieces()
     }
 
+    #[inline]
     pub fn empty(&self) -> Bitboard {
         !self.all_pieces()
     }
 
+    #[inline]
     fn pieces(&self, colour: Colour) -> Bitboard {
         match colour {
             Colour::White => self.white_pieces(),
@@ -644,6 +652,7 @@ impl Board {
         }
     }
 
+    #[inline]
     pub fn white_pieces(&self) -> Bitboard {
         self.bitboards[Colour::White as usize]
             .iter()
@@ -652,6 +661,7 @@ impl Board {
             .unwrap()
     }
 
+    #[inline]
     pub fn black_pieces(&self) -> Bitboard {
         self.bitboards[Colour::Black as usize]
             .iter()
@@ -660,14 +670,17 @@ impl Board {
             .unwrap()
     }
 
+    #[inline]
     fn set_bit(bitboard: &mut Bitboard, i: usize) {
         *bitboard |= 1 << i;
     }
 
+    #[inline]
     fn get_bit(bitboard: Bitboard, i: usize) -> Bitboard {
         bitboard & 1 << i
     }
 
+    #[inline]
     fn clear_bit(bitboard: &mut Bitboard, i: usize) {
         *bitboard &= !(1 << i);
     }
