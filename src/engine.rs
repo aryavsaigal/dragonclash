@@ -13,7 +13,7 @@ impl Engine {
             depth,
         }
     }
-
+    
     pub fn search(&self, board: &mut Board) -> Move {
         let start = Instant::now();
 
@@ -39,7 +39,6 @@ impl Engine {
         best_move.unwrap()
     }
 
-    #[inline(always)]
     fn negamax(&self, board: &mut Board, depth: u32, mut alpha: i32, beta: i32, counter: &mut u64) -> i32 {
         let moves = board.get_legal_moves(board.turn);
 

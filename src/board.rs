@@ -935,7 +935,6 @@ impl Board {
         Ok(Move::new(from, to, piece, capture, promotion))
     }
 
-    #[inline(always)]
     pub fn make_move(&mut self, mut m: Move, validate: bool) -> Result<(), String> {
         if m.piece.0 != self.turn {
             return Err(format!("Invalid turn, it is {:?}'s move", self.turn));
@@ -1141,7 +1140,6 @@ impl Board {
         Ok(())
     }
 
-    #[inline(always)]
     pub fn unmake_move(&mut self) -> Result<(), String> {
         let (last_move, old_castle, old_en_passant) = self
             .move_history
