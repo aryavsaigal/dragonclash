@@ -4,13 +4,13 @@ use crate::board::{Bitboard, Board, Colour, Move, Pieces, State};
 use std::time::Instant;
 
 pub struct Engine {
-    depth: u32
+    depth: u32,
 }
 
 impl Engine {
     pub fn new(depth: u32) -> Engine {
         Engine {
-            depth
+            depth,
         }
     }
 
@@ -39,6 +39,7 @@ impl Engine {
         best_move.unwrap()
     }
 
+    #[inline(always)]
     fn negamax(&self, board: &mut Board, depth: u32, mut alpha: i32, beta: i32, counter: &mut u64) -> i32 {
         let moves = board.get_legal_moves(board.turn);
 
@@ -71,6 +72,7 @@ impl Engine {
         best_score
     }
 
+    #[inline(always)]
     fn material_score(bitboards: &[[Bitboard; 6];2], c: Colour) -> i32 {
         let mut score: i32 = 0;
         for (colour, bits) in bitboards.iter().enumerate() {
@@ -81,6 +83,7 @@ impl Engine {
         score
     }
 
+    #[inline(always)]
     fn score(piece: Pieces) -> u32 {
         match piece {
             Pieces::King => 200,
@@ -90,5 +93,55 @@ impl Engine {
             Pieces::Knight => 3,
             Pieces::Pawn => 1,
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct ZobristHashing {
+    pub pieces: [[[u64; 64]; 6]; 2],
+    pub black_to_move: u64,
+    pub castling_rights: [u64; 4], // K Q k q
+    pub en_passant: [u64; 8]
+}
+
+impl ZobristHashing {
+    pub fn new(random: &mut SplitMix64) -> ZobristHashing {
+        let mut pieces = [[[0u64; 64]; 6]; 2];
+        for c in 0..=1 {
+            for piece in 0..=5 {
+                for sq in 0..=63 {
+                    pieces[c][piece][sq] = random.next_u64();
+                }
+            }
+        }
+
+        let mut castling_rights = [0;4];
+        let mut en_passant = [0;8];
+
+        castling_rights.fill_with(|| random.next_u64());
+        en_passant.fill_with(|| random.next_u64());
+
+        let black_to_move = random.next_u64();
+
+        ZobristHashing { pieces, black_to_move, castling_rights, en_passant }
+    }
+}
+
+pub struct SplitMix64 {
+    state: u64
+}
+
+impl SplitMix64 {
+    pub fn new(state: u64) -> SplitMix64 {
+        SplitMix64 { state }
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.state = self.state.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = self.state;
+
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^ (z >> 31)
     }
 }
