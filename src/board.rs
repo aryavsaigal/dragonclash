@@ -101,7 +101,6 @@ impl Board {
                         Colour::White => [self.bitboard_under_attack(WHITE_KING_CHECK, colour), self.bitboard_under_attack(WHITE_QUEEN_CHECK, colour)],
                         Colour::Black => [self.bitboard_under_attack(BLACK_KING_CHECK, colour), self.bitboard_under_attack(BLACK_QUEEN_CHECK, colour)]
                     };
-                    println!("{:?}", king_castle_conflicts);
                     possible_moves |= self.castling_rights.colour(
                         colour,
                         self.all_pieces(),
