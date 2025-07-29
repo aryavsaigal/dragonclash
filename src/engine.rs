@@ -13,6 +13,7 @@ const MAX: i32 = 300000;
 pub struct Engine {
     depth: u32,
     transposition_table: Box<[Option<TTEntry>]>,
+    history_table: [[[u32;64];64];2]
 }
 
 impl Engine {
@@ -20,6 +21,7 @@ impl Engine {
         Engine {
             depth,
             transposition_table: vec![None; TABLE_SIZE].into_boxed_slice(),
+            history_table: [[[0;64];64];2]
         }
     }
 
@@ -30,15 +32,15 @@ impl Engine {
     pub fn search(&mut self, board: &mut Board) -> Move {
         let start = Instant::now();
 
-        let mut moves = board.get_legal_moves(board.turn);
+        let mut moves = self.generate_moves(board, board.turn);
         moves.sort_by(|a, b| b.score.cmp(&a.score));
         let mut best_move = None;
         let mut best_score = MIN;
         let mut nodes_checked = 0;
 
         for depth in 1..=self.depth {
-            let mut alpha = if depth > 1 { best_score - 50 } else { MIN };
-            let mut beta = if depth > 1 { best_score + 50 } else { MAX };
+            let mut alpha = if depth > 1 { best_score - 75 } else { MIN };
+            let mut beta = if depth > 1 { best_score + 75 } else { MAX };
 
             if let Some(prev) = best_move {
                 if let Some(pos) = moves.iter().position(|&m| m == prev) {
@@ -82,8 +84,19 @@ impl Engine {
     }
 
     #[inline(always)]
-    fn get_index(hash: u64) -> usize {
+    pub fn get_index(hash: u64) -> usize {
         (hash & (TABLE_SIZE - 1) as u64).try_into().unwrap()
+    }
+
+    #[inline(always)]
+    fn generate_moves(&self, board: &mut Board, colour: Colour) -> Vec<Move> {
+        let mut moves = board.get_legal_moves(colour, Some(&self.transposition_table));
+        moves.sort_by(|a, b| {
+            let b_cmp = b.score + self.history_table[colour as usize][b.from][b.to];
+            let a_cmp = a.score + self.history_table[colour as usize][a.from][a.to];
+            b_cmp.cmp(&a_cmp)
+        });
+        moves
     }
 
     fn negamax(
@@ -110,8 +123,7 @@ impl Engine {
             }
         }
 
-        let mut moves = board.get_legal_moves(board.turn);
-        moves.sort_by(|a, b| b.score.cmp(&a.score));
+        let moves = self.generate_moves(board, board.turn);
 
         if depth == 0 || moves.len() == 0 || board.state != State::Continue {
             *counter += 1;
@@ -130,6 +142,13 @@ impl Engine {
             alpha = std::cmp::max(alpha, best_score);
 
             if alpha >= beta {
+                if m.capture.is_none() {
+                    let ht = &mut self.history_table[board.turn as usize][m.from][m.to];
+                    *ht += depth * depth;
+                    if *ht > 32768 {
+                        *ht /= 2;
+                    }
+                }
                 break;
             }
         }

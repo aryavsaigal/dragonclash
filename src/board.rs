@@ -1,6 +1,6 @@
 use std::ops::Not;
 
-use crate::engine::{Engine, SplitMix64, ZobristHashing};
+use crate::engine::{Engine, SplitMix64, TTEntry, ZobristHashing};
 
 const MAX_MOVES: usize = 218;
 
@@ -448,7 +448,7 @@ impl Board {
             != 0
     }
 
-    pub fn get_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
+    pub fn get_legal_moves(&mut self, colour: Colour, ttable: Option<&Box<[Option<TTEntry>]>>) -> Vec<Move> {
         let mut pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
         let mut legal_moves = Vec::with_capacity(MAX_MOVES);
 
@@ -457,6 +457,14 @@ impl Board {
             if self.bitboards[!colour as usize][Pieces::King as usize] != 0 && !self.is_check(colour) {
                 if let Some(capture) = m.capture {
                     m.score = Engine::mvv_lva_score(m.piece.1, capture.1);
+                    if let Some(transposition_table) = ttable {
+                        let index = Engine::get_index(self.hash);
+                        if let Some(entry) = transposition_table[index] {
+                            if entry.hash == self.hash {
+                                m.score += 500000;
+                            }
+                        }
+                    }
                 }
                 legal_moves.push(*m);
             }
@@ -469,7 +477,7 @@ impl Board {
     pub fn verbose_perft(&mut self, depth: usize) {
         let start = std::time::Instant::now();
         let colour = self.turn;
-        let moves = self.get_legal_moves(colour);
+        let moves = self.get_legal_moves(colour, None);
         let mut counter = 0;
 
         for m in moves {
@@ -507,7 +515,7 @@ impl Board {
             return;
         }
         
-        let moves = self.get_legal_moves(colour);
+        let moves = self.get_legal_moves(colour, None);
 
         for m in moves {
             self.make_move(m, false).unwrap();
@@ -955,7 +963,7 @@ impl Board {
         }
 
         if validate {
-            if !self.get_legal_moves(m.piece.0).contains(&m) { return Err("Invalid move".to_string()) };
+            if !self.get_legal_moves(m.piece.0, None).contains(&m) { return Err("Invalid move".to_string()) };
         }
 
         self.pieces[m.from] = None;
@@ -1327,7 +1335,7 @@ impl Board {
 
     pub fn get_game_state(&mut self, validate_no_moves: bool) -> State {
         if validate_no_moves {
-            if self.get_legal_moves(self.turn).len() != 0 { return State::Continue }
+            if self.get_legal_moves(self.turn, None).len() != 0 { return State::Continue }
         }
         if self.is_check(Colour::White) {
             return State::Checkmate(Colour::White);
@@ -1368,13 +1376,13 @@ fn rand_u64() -> u64 {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Move {
-    from: usize,
-    to: usize,
-    piece: (Colour, Pieces),
-    capture: Option<(Colour, Pieces)>,
-    promotion: Option<Pieces>,
-    en_passant: bool,
-    castle: bool,
+    pub from: usize,
+    pub to: usize,
+    pub piece: (Colour, Pieces),
+    pub capture: Option<(Colour, Pieces)>,
+    pub promotion: Option<Pieces>,
+    pub en_passant: bool,
+    pub castle: bool,
     pub score: u32
 }
 

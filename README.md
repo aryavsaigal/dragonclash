@@ -9,13 +9,15 @@ it has (drumrolls please)
 - magical bitboards!!!! (without the al in magical)
 - negamax with alpha beta pruning
 - zobrist hashing
+- transposition table
+- iterative deepening
+- aspiration window
+- history heurestic table
 - fancy board representation (that doesn't work in 99% of terminals)
+- much more
 
 ## upcoming features
 
-- tt
-- iterative deepening
-- better move ordering
 - everything else on the chessprogramming wiki
 - a complete rewrite in assembly for optimisation
 - play against a chimpanzee that is playing random moves 
