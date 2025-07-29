@@ -18,9 +18,9 @@ pub struct Board {
     en_passant: Bitboard,
     pieces: [Option<(Colour, Pieces)>; 64],
     attack_tables: [[[Bitboard; 64]; 6]; 2],
-    move_history: Vec<(Move, Castle, Bitboard)>,
+    move_history: Vec<(Move, Castle, Bitboard, usize)>,
     rook_magic_table: Vec<Magic>,
-    bishop_magic_table: Vec<Magic>
+    bishop_magic_table: Vec<Magic>,
 }
 
 #[inline(always)]
@@ -448,7 +448,7 @@ impl Board {
 
         for m in &pseudo_legal_moves {
             self.make_move(*m, false).unwrap();
-            if !self.is_check(colour) {
+            if self.bitboards[!colour as usize][Pieces::King as usize] != 0 && !self.is_check(colour) {
                 legal_moves.push(*m);
             }
             self.unmake_move().unwrap();
@@ -693,7 +693,7 @@ impl Board {
     }
 
     #[inline(always)]
-    fn pop_lsb(bitboard: &mut Bitboard) -> Option<usize> {
+    pub fn pop_lsb(bitboard: &mut Bitboard) -> Option<usize> {
         let i = bitboard.trailing_zeros() as usize;
         if *bitboard > 0 {
             *bitboard &= *bitboard - 1
@@ -940,8 +940,8 @@ impl Board {
             return Err(format!("Invalid turn, it is {:?}'s move", self.turn));
         }
 
-        if validate && !self.get_legal_moves(m.piece.0).contains(&m) {
-            return Err("Invalid move".to_string());
+        if validate {
+            if !self.get_legal_moves(m.piece.0).contains(&m) { return Err("Invalid move".to_string()) };
         }
 
         self.pieces[m.from] = None;
@@ -950,6 +950,7 @@ impl Board {
         self.hash ^= self.zobrist_hash.pieces[m.piece.0 as usize][m.piece.1 as usize][m.from];
         self.hash ^= self.zobrist_hash.pieces[m.piece.0 as usize][m.piece.1 as usize][m.to];
 
+        let old_half_move = self.half_moves;
         self.half_moves += 1;
 
         let pre_castle_state = self.castling_rights.clone();
@@ -1116,7 +1117,7 @@ impl Board {
         }
     
         self.move_history
-            .push((m, pre_castle_state, old_en_passant));
+            .push((m, pre_castle_state, old_en_passant, old_half_move));
 
         if (m.from as isize - m.to as isize).abs() == 16 && m.piece.1 == Pieces::Pawn {
             self.en_passant = (1 as Bitboard) << (m.from + m.to) / 2;
@@ -1141,7 +1142,7 @@ impl Board {
     }
 
     pub fn unmake_move(&mut self) -> Result<(), String> {
-        let (last_move, old_castle, old_en_passant) = self
+        let (last_move, old_castle, old_en_passant, half_move) = self
             .move_history
             .pop()
             .ok_or_else(|| "No move history".to_string())?;
@@ -1160,7 +1161,7 @@ impl Board {
         }
 
         self.castling_rights = old_castle;
-        if self.half_moves > 0 { self.half_moves -= 1 };
+        self.half_moves = half_move;
 
         if self.en_passant != 0 {
             self.hash ^= self.zobrist_hash.en_passant[self.en_passant.trailing_zeros() as usize % 8];
@@ -1189,8 +1190,6 @@ impl Board {
         
 
         if let Some(piece) = last_move.capture {
-            self.half_moves = 0;
-
             self.pieces[last_move.to] = Some(piece);
             Board::set_bit(
                 &mut self.bitboards[piece.0 as usize][piece.1 as usize],
@@ -1296,9 +1295,9 @@ impl Board {
             }
         }
 
-        if last_move.piece.1 == Pieces::Pawn {
-            self.half_moves = 0;
-        }
+        // if last_move.piece.1 == Pieces::Pawn {
+        //     self.half_moves = 0;
+        // }
 
         if !self.turn == Colour::Black {
             if self.full_moves > 0 { self.full_moves -= 1 };
