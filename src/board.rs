@@ -1,4 +1,4 @@
-use std::ops::Not;
+use std::{ops::Not, usize};
 
 use crate::engine::{Engine, SplitMix64, TTEntry, ZobristHashing};
 
@@ -22,6 +22,7 @@ pub struct Board {
     move_history: Vec<(Move, Castle, Bitboard, usize)>,
     rook_magic_table: Vec<Magic>,
     bishop_magic_table: Vec<Magic>,
+    pawn_table: [[Bitboard; 64];2]
 }
 
 #[inline(always)]
@@ -68,6 +69,7 @@ impl Board {
             rook_magic_table: Vec::with_capacity(64),
             bishop_magic_table: Vec::with_capacity(64),
             hash: 0,
+            pawn_table: [[0;64];2],
             zobrist_hash: ZobristHashing::new(&mut SplitMix64::new(seed))
         };
 
@@ -82,21 +84,19 @@ impl Board {
         self.precompute_pawn_attacks();
         self.generate_magic_table_rook();
         self.generate_magic_table_bishop();
+        self.precompute_pawn_moves();
     }
 
     pub fn get_pseudo_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
         let mut moves = Vec::with_capacity(MAX_MOVES);
-        let bitboards_copy: Vec<(usize, u64)> = self.bitboards[colour as usize]
-            .iter()
-            .copied()
-            .enumerate()
-            .collect();
+        let bitboards_copy = self.bitboards[colour as usize];
 
         let my_pieces = self.pieces(colour);
         let opp_pieces = self.pieces(!colour);
         let all_pieces = my_pieces | opp_pieces;
 
-        for (i, mut b) in bitboards_copy {
+        for i in 0..bitboards_copy.len() {
+            let mut b = bitboards_copy[i];
             if i == Pieces::King as usize {
                 let from = Board::pop_lsb(&mut b).unwrap();
                 let is_check = self.is_check(colour);
@@ -142,7 +142,7 @@ impl Board {
                     let mut possible_moves = self.attack_tables[colour as usize][i][from];
 
                     possible_moves &= opp_pieces | self.en_passant;
-                    possible_moves |= self.pawn_moves((1 as Bitboard) << from, colour);
+                    possible_moves |= self.pawn_table[colour as usize][from] & !all_pieces;
 
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         if to / 8 == 7 && colour == Colour::White
@@ -266,19 +266,26 @@ impl Board {
         }
     }
 
-    fn pawn_moves(&self, bit: Bitboard, colour: Colour) -> Bitboard {
-        let mut moves = 0 as Bitboard;
-        moves |= match colour {
-            Colour::White => (bit << 8) & !self.all_pieces(),
-            Colour::Black => (bit >> 8) & !self.all_pieces(),
-        };
+    fn precompute_pawn_moves(&mut self) {
+        for sq in 0..=63 {
+            let sq_bit = (1 as Bitboard) << sq;
+            for c in 0..=1 {
+                let mut moves = 0 as Bitboard;
+                let colour = Colour::from_num(c).unwrap();
+                moves |= match colour {
+                    Colour::White => sq_bit << 8,
+                    Colour::Black => sq_bit >> 8,
+                };
+                
+                moves |= match colour {
+                    Colour::White => moves << 8 & rank(3),
+                    Colour::Black => moves >> 8 & rank(4),
+                };
 
-        moves |= match colour {
-            Colour::White => (moves << 8 & rank(3)) & !self.all_pieces(),
-            Colour::Black => (moves >> 8 & rank(4)) & !self.all_pieces(),
-        };
+                self.pawn_table[c][sq] = moves;
+            }
 
-        moves
+        }
     }
 
     fn magic_rook_moves(sq: usize, occ: Bitboard) -> Bitboard {
@@ -827,6 +834,7 @@ impl Board {
     }
 
     pub fn display(&mut self) {
+        let last_move = self.move_history.last();
         for rank in (0..=7).rev() {
             print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", rank + 1);
             for file in 0..=7 {
@@ -834,14 +842,22 @@ impl Board {
                     None => " ".to_string(),
                     Some((colour, piece)) => colour.symbol().to_string() + piece.symbol(),
                 };
-
-                print!(
-                    "{}{} \x1b[0m",
-                    if (file % 2 == 0) ^ (rank % 2 == 0) {
+                let mut highlight = if (file % 2 == 0) ^ (rank % 2 == 0) {
                         "\x1b[48;5;250m"
                     } else {
                         "\x1b[48;5;240m"
-                    },
+                    };
+                if let Some((m, _, _ ,_)) = last_move {
+                    if Board::get_bit_position(rank, file) == m.to {
+                        highlight = "\x1b[48;2;230;200;90m";
+                    }
+                    else if Board::get_bit_position(rank, file) == m.from {
+                        highlight = "\x1b[48;2;245;220;120m"
+                    }
+                }
+                print!(
+                    "{}{} \x1b[0m",
+                    highlight,
                     symbol
                 );
             }
