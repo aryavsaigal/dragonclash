@@ -1,20 +1,24 @@
-use std::i32;
+use std::{i32};
 
 use crate::board::{Bitboard, Board, Colour, Move, Pieces, State};
 use std::time::Instant;
 
+const TABLE_SIZE: usize = 1_usize << 22;
+
 pub struct Engine {
     depth: u32,
+    transposition_table: Box<[Option<TTEntry>]>,
 }
 
 impl Engine {
     pub fn new(depth: u32) -> Engine {
         Engine {
             depth,
+            transposition_table: vec![None; TABLE_SIZE].into_boxed_slice()
         }
     }
-    
-    pub fn search(&self, board: &mut Board) -> Move {
+
+    pub fn search(&mut self, board: &mut Board) -> Move {
         let start = Instant::now();
 
         let moves = board.get_legal_moves(board.turn);
@@ -35,11 +39,31 @@ impl Engine {
         let duration = start.elapsed();
         println!("nodes checkec: {nodes_checked}");
         println!("time taken: {:?}", duration);
+        println!("nps: {:?}", (nodes_checked as f64 / duration.as_secs_f64()).round() as u64);
 
         best_move.unwrap()
     }
 
-    fn negamax(&self, board: &mut Board, depth: u32, mut alpha: i32, beta: i32, counter: &mut u64) -> i32 {
+    #[inline(always)]
+    fn get_index(hash: u64) -> usize {
+        (hash & (TABLE_SIZE - 1) as u64).try_into().unwrap()
+    }
+
+    fn negamax(&mut self, board: &mut Board, depth: u32, mut alpha: i32, beta: i32, counter: &mut u64) -> i32 {
+        let original_alpha = alpha;
+        let tt_index = Engine::get_index(board.hash);
+
+        if let Some(entry) = self.transposition_table[tt_index] {
+            if entry.hash == board.hash && entry.depth as u32 >= depth {
+                match entry.flag {
+                    Flag::Exact => return entry.value,
+                    Flag::Lower if entry.value >= beta => return entry.value,
+                    Flag::Upper if entry.value <= alpha => return entry.value,
+                    _ => {}
+                };
+            }
+        }
+
         let moves = board.get_legal_moves(board.turn);
 
         if depth == 0 || moves.len() == 0 {
@@ -67,6 +91,16 @@ impl Engine {
                 break;
             }
         }
+
+        let flag = if best_score <= original_alpha {
+            Flag::Upper
+        } else if best_score >= beta {
+            Flag::Lower
+        } else {
+            Flag::Exact
+        };
+
+        self.transposition_table[tt_index] = Some(TTEntry::new(board.hash, best_score, depth as u8, flag, None));
 
         best_score
     }
@@ -144,3 +178,32 @@ impl SplitMix64 {
         z ^ (z >> 31)
     }
 }
+
+#[derive(Clone, Copy)]
+pub enum Flag {
+    Exact,
+    Lower,
+    Upper
+}
+
+#[derive(Clone, Copy)]
+pub struct TTEntry {
+    pub hash: u64,
+    pub value: i32,
+    pub depth: u8,
+    pub flag: Flag,
+    pub best_move: Option<Move>
+}
+
+impl TTEntry {
+    pub fn new(hash: u64, value: i32, depth: u8, flag: Flag, best_move: Option<Move>) -> TTEntry {
+        TTEntry {
+            hash,
+            value,
+            depth,
+            flag,
+            best_move,
+        }
+    }
+}
+

@@ -12,7 +12,7 @@ const DEFAULT: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 const SEED: u64 = 180280668239036416;
 fn main() {
     let mut board = Board::new(SEED);
-    let engine = Engine::new(6);
+    let mut engine = Engine::new(6);
 
     board.load_fen(DEFAULT.to_string());
     let mut error_message = String::new();
