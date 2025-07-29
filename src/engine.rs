@@ -49,7 +49,7 @@ impl Engine {
             loop {
                 let mut a = alpha;
                 let b = beta;
-                let mut best_score = MIN;
+                best_score = MIN;
 
                 for m in &moves {
                     board.make_move(*m, false).unwrap();
