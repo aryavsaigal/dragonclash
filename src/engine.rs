@@ -23,28 +23,51 @@ impl Engine {
         }
     }
 
+    // fn score_moves(&self, moves: &mut Vec<Move>) {
+
+    // }
+
     pub fn search(&mut self, board: &mut Board) -> Move {
         let start = Instant::now();
 
         let mut moves = board.get_legal_moves(board.turn);
+        moves.sort_by(|a, b| b.score.cmp(&a.score));
         let mut best_move = None;
-
+        let mut best_score = MIN;
         let mut nodes_checked = 0;
+
         for depth in 1..=self.depth {
-            let mut best_score = MIN;
+            let mut alpha = if depth > 1 { best_score - 50 } else { MIN };
+            let mut beta = if depth > 1 { best_score + 50 } else { MAX };
+
             if let Some(prev) = best_move {
                 if let Some(pos) = moves.iter().position(|&m| m == prev) {
                     moves.swap(0, pos);
                 }
             }
-            for m in &moves {
-                board.make_move(*m, false).unwrap();
-                let move_evaluation = -self.negamax(board, depth - 1, MIN, MAX, &mut nodes_checked);
-                board.unmake_move().unwrap();
-                if move_evaluation > best_score {
-                    best_score = move_evaluation;
-                    best_move = Some(*m);
+            
+            loop {
+                let mut a = alpha;
+                let b = beta;
+                let mut best_score = MIN;
+
+                for m in &moves {
+                    board.make_move(*m, false).unwrap();
+                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked);
+                    board.unmake_move().unwrap();
+                    if move_evaluation > best_score {
+                        best_score = move_evaluation;
+                        best_move = Some(*m);
+                    }
+                    a = std::cmp::max(a, move_evaluation);
                 }
+
+                if best_score <= alpha || best_score >= beta {
+                    alpha = MIN;
+                    beta = MAX;
+                    continue;
+                }
+                break;
             }
         }
         let duration = start.elapsed();
@@ -87,9 +110,10 @@ impl Engine {
             }
         }
 
-        let moves = board.get_legal_moves(board.turn);
+        let mut moves = board.get_legal_moves(board.turn);
+        moves.sort_by(|a, b| b.score.cmp(&a.score));
 
-        if depth == 0 || moves.len() == 0 {
+        if depth == 0 || moves.len() == 0 || board.state != State::Continue {
             *counter += 1;
             return Engine::evaluate(board, moves.len() == 0);
         };
@@ -143,7 +167,8 @@ impl Engine {
                     } else {
                         20000
                     }
-                }
+                },
+                State::Draw => -100,
                 _ => 0,
             };
         };
@@ -162,6 +187,11 @@ impl Engine {
             }
         }
         score
+    }
+
+    #[inline(always)]
+    pub fn mvv_lva_score(attacker: Pieces, victim: Pieces) -> u32 {
+        PIECE_SCORES[victim as usize] + (6 - attacker as u32) * 10
     }
 
     #[inline(always)]
@@ -234,14 +264,7 @@ impl Engine {
 
     #[inline(always)]
     fn score(piece: Pieces) -> u32 {
-        match piece {
-            Pieces::King => 20000,
-            Pieces::Queen => 900,
-            Pieces::Rook => 500,
-            Pieces::Bishop => 320,
-            Pieces::Knight => 320,
-            Pieces::Pawn => 100,
-        }
+        PIECE_SCORES[piece as usize]
     }
 }
 

@@ -1,6 +1,6 @@
 use std::ops::Not;
 
-use crate::engine::{SplitMix64, ZobristHashing};
+use crate::engine::{Engine, SplitMix64, ZobristHashing};
 
 const MAX_MOVES: usize = 218;
 
@@ -15,6 +15,7 @@ pub struct Board {
     pub hash: u64,
     pub zobrist_hash: ZobristHashing,
     pub castling_rights: Castle,
+    pub state: State,
     en_passant: Bitboard,
     pieces: [Option<(Colour, Pieces)>; 64],
     attack_tables: [[[Bitboard; 64]; 6]; 2],
@@ -60,6 +61,7 @@ impl Board {
             turn: Colour::White,
             full_moves: 1,
             half_moves: 0,
+            state: State::Continue,
             castling_rights: Castle::new(),
             en_passant: 0,
             move_history: Vec::with_capacity(5989),
@@ -90,6 +92,10 @@ impl Board {
             .enumerate()
             .collect();
 
+        let my_pieces = self.pieces(colour);
+        let opp_pieces = self.pieces(!colour);
+        let all_pieces = my_pieces | opp_pieces;
+
         for (i, mut b) in bitboards_copy {
             if i == Pieces::King as usize {
                 let from = Board::pop_lsb(&mut b).unwrap();
@@ -103,11 +109,11 @@ impl Board {
                     };
                     possible_moves |= self.castling_rights.colour(
                         colour,
-                        self.all_pieces(),
+                        all_pieces,
                         king_castle_conflicts,
                     )
                 };
-                possible_moves &= !self.pieces(colour);
+                possible_moves &= !my_pieces;
                 while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                     moves.push(Move::new(
                         from,
@@ -120,7 +126,7 @@ impl Board {
             } else if i == Pieces::Knight as usize {
                 while let Some(from) = Board::pop_lsb(&mut b) {
                     let mut possible_moves = self.attack_tables[colour as usize][i][from];
-                    possible_moves &= !self.pieces(colour);
+                    possible_moves &= !my_pieces;
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         moves.push(Move::new(
                             from,
@@ -135,7 +141,7 @@ impl Board {
                 while let Some(from) = Board::pop_lsb(&mut b) {
                     let mut possible_moves = self.attack_tables[colour as usize][i][from];
 
-                    possible_moves &= self.pieces(!colour) | self.en_passant;
+                    possible_moves &= opp_pieces | self.en_passant;
                     possible_moves |= self.pawn_moves((1 as Bitboard) << from, colour);
 
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
@@ -166,8 +172,8 @@ impl Board {
                 }
             } else if i == Pieces::Rook as usize {
                 while let Some(from) = Board::pop_lsb(&mut b) {
-                    let index = self.rook_magic_table[from].get_index(self.all_pieces() & self.rook_magic_table[from].mask);
-                    let mut possible_moves = self.rook_magic_table[from].attacks[index].unwrap() & !self.pieces(colour);
+                    let index = self.rook_magic_table[from].get_index(all_pieces & self.rook_magic_table[from].mask);
+                    let mut possible_moves = self.rook_magic_table[from].attacks[index].unwrap() & !my_pieces;
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         moves.push(Move::new(
                             from,
@@ -180,8 +186,8 @@ impl Board {
                 }
             } else if i == Pieces::Bishop as usize {
                 while let Some(from) = Board::pop_lsb(&mut b) {
-                    let index = self.bishop_magic_table[from].get_index(self.all_pieces() & self.bishop_magic_table[from].mask);
-                    let mut possible_moves = self.bishop_magic_table[from].attacks[index].unwrap() & !self.pieces(colour);
+                    let index = self.bishop_magic_table[from].get_index(all_pieces & self.bishop_magic_table[from].mask);
+                    let mut possible_moves = self.bishop_magic_table[from].attacks[index].unwrap() & !my_pieces;
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         moves.push(Move::new(
                             from,
@@ -194,9 +200,9 @@ impl Board {
                 }
             } else if i == Pieces::Queen as usize {
                 while let Some(from) = Board::pop_lsb(&mut b) {
-                    let index_r = self.rook_magic_table[from].get_index(self.all_pieces() & self.rook_magic_table[from].mask);
-                    let index_b = self.bishop_magic_table[from].get_index(self.all_pieces() & self.bishop_magic_table[from].mask);
-                    let mut possible_moves = (self.rook_magic_table[from].attacks[index_r].unwrap() | self.bishop_magic_table[from].attacks[index_b].unwrap()) & !self.pieces(colour);
+                    let index_r = self.rook_magic_table[from].get_index(all_pieces & self.rook_magic_table[from].mask);
+                    let index_b = self.bishop_magic_table[from].get_index(all_pieces & self.bishop_magic_table[from].mask);
+                    let mut possible_moves = (self.rook_magic_table[from].attacks[index_r].unwrap() | self.bishop_magic_table[from].attacks[index_b].unwrap()) & !my_pieces;
                     while let Some(to) = Board::pop_lsb(&mut possible_moves) {
                         moves.push(Move::new(
                             from,
@@ -443,12 +449,15 @@ impl Board {
     }
 
     pub fn get_legal_moves(&mut self, colour: Colour) -> Vec<Move> {
-        let pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
+        let mut pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
         let mut legal_moves = Vec::with_capacity(MAX_MOVES);
 
-        for m in &pseudo_legal_moves {
+        for m in &mut pseudo_legal_moves {
             self.make_move(*m, false).unwrap();
             if self.bitboards[!colour as usize][Pieces::King as usize] != 0 && !self.is_check(colour) {
+                if let Some(capture) = m.capture {
+                    m.score = Engine::mvv_lva_score(m.piece.1, capture.1);
+                }
                 legal_moves.push(*m);
             }
             self.unmake_move().unwrap();
@@ -457,7 +466,9 @@ impl Board {
         legal_moves
     }
 
-    pub fn verbose_perft(&mut self, colour: Colour, depth: usize){
+    pub fn verbose_perft(&mut self, depth: usize) {
+        let start = std::time::Instant::now();
+        let colour = self.turn;
         let moves = self.get_legal_moves(colour);
         let mut counter = 0;
 
@@ -476,7 +487,10 @@ impl Board {
             );
             counter += node_counter;
         }
+        let duration = start.elapsed();
         println!("Total: {}", counter);
+        println!("time taken: {:?}", duration);
+        println!("nps: {:?}", counter / (duration.as_secs_f64()).round() as u64);
     }
 
     // pub fn move_history_to_algebraic(&self) -> String {
@@ -1127,7 +1141,7 @@ impl Board {
         }
 
         if self.half_moves >= 100 {
-            todo!("DRAW");
+            self.state = State::Draw;
         }
 
         if self.turn == Colour::Black {
@@ -1303,6 +1317,8 @@ impl Board {
             if self.full_moves > 0 { self.full_moves -= 1 };
         }
 
+        self.state = State::Continue;
+
         self.turn = !self.turn;
         self.hash ^= self.zobrist_hash.black_to_move;
 
@@ -1359,6 +1375,7 @@ pub struct Move {
     promotion: Option<Pieces>,
     en_passant: bool,
     castle: bool,
+    pub score: u32
 }
 
 impl Move {
@@ -1377,6 +1394,7 @@ impl Move {
             piece,
             en_passant: false,
             castle: false,
+            score: 0
         }
     }
 }
@@ -1558,6 +1576,7 @@ impl Castle {
     }
 }
 
+#[derive(Clone, Copy, PartialEq)]
 pub enum State {
     Checkmate(Colour),
     Stalemate,

@@ -13,7 +13,7 @@ const DEFAULT: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 const SEED: u64 = 180280668239036416;
 fn main() {
     let mut board = Board::new(SEED);
-    let mut engine = Engine::new(6);
+    let mut engine = Engine::new(7);
 
     board.load_fen(DEFAULT.to_string());
     let mut error_message = String::new();
@@ -22,6 +22,7 @@ fn main() {
     loop {
         println!("\x1B[2J\x1B[1;1H");
         board.display();
+        // println!("{}", board.half_moves);
         let m = engine.search(&mut board);
         board.make_move(m, false).unwrap();
         

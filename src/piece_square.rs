@@ -83,3 +83,12 @@ pub const BISHOP_TABLE_BLACK: [i32; 64] = mirror_table(BISHOP_TABLE);
 pub const ROOK_TABLE_BLACK: [i32; 64] = mirror_table(ROOK_TABLE);
 pub const QUEEN_TABLE_BLACK: [i32; 64] = mirror_table(QUEEN_TABLE);
 pub const KING_TABLE_MG_BLACK: [i32; 64] = mirror_table(KING_TABLE_MG);
+
+pub const PIECE_SCORES: [u32; 6] = [
+    100,   // Pawn
+    320,   // Knight
+    320,   // Bishop
+    500,   // Rook
+    900,   // Queen
+    20000, // King
+];
