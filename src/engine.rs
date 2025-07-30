@@ -9,11 +9,17 @@ use std::time::Instant;
 const TABLE_SIZE: usize = 1_usize << 22;
 const MIN: i32 = -300000;
 const MAX: i32 = 300000;
+const ASPIRATION_WINDOW: i32 = 12;
+const MAX_DEPTH: usize = 16;
+const MAX_HISTORY: u32 = 325;
+const KILLER_MOVES: u32 = 200;
+const R: u32 = 2;
 
 pub struct Engine {
     depth: u32,
     transposition_table: Box<[Option<TTEntry>]>,
-    history_table: [[[u32;64];64];2]
+    history_table: [[[u32;64];64];2],
+    killer_moves: [[Option<Move>; 2];MAX_DEPTH],
 }
 
 impl Engine {
@@ -21,7 +27,8 @@ impl Engine {
         Engine {
             depth,
             transposition_table: vec![None; TABLE_SIZE].into_boxed_slice(),
-            history_table: [[[0;64];64];2]
+            history_table: [[[0;64];64];2],
+            killer_moves: [[None; 2];MAX_DEPTH],
         }
     }
 
@@ -32,19 +39,22 @@ impl Engine {
     pub fn search(&mut self, board: &mut Board) -> Move {
         let start = Instant::now();
 
-        let mut moves = self.generate_moves(board, board.turn);
-        moves.sort_by(|a, b| b.score.cmp(&a.score));
+        let mut moves = self.generate_moves(board, board.turn, None);
         let mut best_move = None;
         let mut best_score = MIN;
         let mut nodes_checked = 0;
+        let mut nm_counter = 0;
+        let mut redo = 0;
 
         for depth in 1..=self.depth {
-            let mut alpha = if depth > 1 { best_score - 75 } else { MIN };
-            let mut beta = if depth > 1 { best_score + 75 } else { MAX };
+            let mut window = ASPIRATION_WINDOW;
+            let mut alpha = if depth > 1 { best_score - window } else { MIN };
+            let mut beta = if depth > 1 { best_score + window } else { MAX };
 
             if let Some(prev) = best_move {
                 if let Some(pos) = moves.iter().position(|&m| m == prev) {
-                    moves.swap(0, pos);
+                    let swap = moves.remove(pos);
+                    moves.insert(0, swap);
                 }
             }
             
@@ -55,22 +65,31 @@ impl Engine {
 
                 for m in &moves {
                     board.make_move(*m, false).unwrap();
-                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked);
+                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked, &mut nm_counter);
                     board.unmake_move().unwrap();
                     if move_evaluation > best_score {
                         best_score = move_evaluation;
                         best_move = Some(*m);
                     }
-                    a = std::cmp::max(a, move_evaluation);
+                    a = std::cmp::max(a, best_score);
                 }
 
-                if best_score <= alpha || best_score >= beta {
-                    alpha = MIN;
-                    beta = MAX;
+                if best_score <= alpha {
+                    alpha -= window;
+                    window *= 2;
+                    redo += 1;
+                    continue;
+                }
+                else if best_score >= beta {
+                    beta += window;
+                    window *= 2;
+                    redo += 1;
                     continue;
                 }
                 break;
             }
+
+            self.decay_history();
         }
         let duration = start.elapsed();
         println!("nodes checked: {nodes_checked}");
@@ -79,6 +98,8 @@ impl Engine {
             "nps: {:?}",
             (nodes_checked as f64 / duration.as_secs_f64()).round() as u64
         );
+        println!("aspiration rechecked: {}", redo);
+        println!("nmp: {}", nm_counter);
 
         best_move.unwrap()
     }
@@ -89,14 +110,42 @@ impl Engine {
     }
 
     #[inline(always)]
-    fn generate_moves(&self, board: &mut Board, colour: Colour) -> Vec<Move> {
+    pub fn decay_history(&mut self) {
+        for from in 0..63 {
+            for to in 0..63 {
+                self.history_table[Colour::White as usize][from][to] /= 2;
+                self.history_table[Colour::Black as usize][from][to] /= 2;
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn generate_moves(&self, board: &mut Board, colour: Colour, depth: Option<usize>) -> Vec<Move> {
         let mut moves = board.get_legal_moves(colour, Some(&self.transposition_table));
         moves.sort_by(|a, b| {
-            let b_cmp = b.score + self.history_table[colour as usize][b.from][b.to];
-            let a_cmp = a.score + self.history_table[colour as usize][a.from][a.to];
+            let mut b_cmp = b.score + self.history_table[colour as usize][b.from][b.to];
+            let mut a_cmp = a.score + self.history_table[colour as usize][a.from][a.to];
+
+            if let Some(d) = depth {
+                a_cmp += Engine::killer_bonus(self.killer_moves[d], a);
+                b_cmp += Engine::killer_bonus(self.killer_moves[d], b);
+            }
+
             b_cmp.cmp(&a_cmp)
         });
         moves
+    }
+
+    #[inline(always)]
+    fn killer_bonus(killers: [Option<Move>; 2], mv: &Move) -> u32 {
+        killers.iter().filter(|&k| k == &Some(*mv)).count() as u32 * KILLER_MOVES
+    }
+
+    #[inline(always)]
+    fn endgame(bb: [[Bitboard; 6]; 2]) -> bool {
+        let white = bb[0][1] | bb[0][2] | bb[0][3] | bb[0][4];
+        let black = bb[1][1] | bb[1][2] | bb[1][3] | bb[1][4];
+        (white | black) == 0
     }
 
     fn negamax(
@@ -106,12 +155,13 @@ impl Engine {
         mut alpha: i32,
         beta: i32,
         counter: &mut u64,
+        nm_counter: &mut u64
     ) -> i32 {
         let original_alpha = alpha;
         let tt_index = Engine::get_index(board.hash);
         let mut replace_tt = true;
 
-        if let Some(entry) = self.transposition_table[tt_index] {
+        if let Some(entry) = &self.transposition_table[tt_index] {
             replace_tt = (entry.depth as u32) < depth || entry.hash != board.hash;
             if entry.hash == board.hash && entry.depth as u32 >= depth {
                 match entry.flag {
@@ -123,7 +173,7 @@ impl Engine {
             }
         }
 
-        let moves = self.generate_moves(board, board.turn);
+        let moves = self.generate_moves(board, board.turn, Some(depth as usize));
 
         if depth == 0 || moves.len() == 0 || board.state != State::Continue {
             *counter += 1;
@@ -131,13 +181,28 @@ impl Engine {
         };
 
         let mut best_score = MIN;
+        let mut best_move = None;
+
+        if depth >= R+1 && !board.is_check(board.turn) && !Engine::endgame(board.bitboards) {
+            board.make_null_move();
+            let score = -self.negamax(board, depth - R - 1, -beta, -beta + 1, counter, nm_counter);
+            board.unmake_null_move();
+
+            if score >= beta {
+                *nm_counter += 1;
+                return beta;
+            }
+        }
 
         for m in moves {
             board.make_move(m, false).unwrap();
-            best_score = std::cmp::max(
-                best_score,
-                -self.negamax(board, depth - 1, -beta, -alpha, counter),
-            );
+
+            let eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter);
+            if eval > best_score {
+                best_score = eval;
+                best_move = Some(m);
+            }
+
             board.unmake_move().unwrap();
             alpha = std::cmp::max(alpha, best_score);
 
@@ -145,8 +210,13 @@ impl Engine {
                 if m.capture.is_none() {
                     let ht = &mut self.history_table[board.turn as usize][m.from][m.to];
                     *ht += depth * depth;
-                    if *ht > 32768 {
+                    if *ht > MAX_HISTORY {
                         *ht /= 2;
+                    }
+
+                    if !self.killer_moves[depth as usize].contains(&Some(m)) {
+                        self.killer_moves[depth as usize][1] = self.killer_moves[depth as usize][0];
+                        self.killer_moves[depth as usize][0] = Some(m);
                     }
                 }
                 break;
@@ -167,7 +237,7 @@ impl Engine {
                 best_score,
                 depth as u8,
                 flag,
-                None,
+                best_move,
             ));
         }
 
@@ -176,35 +246,21 @@ impl Engine {
 
     #[inline(always)]
     fn evaluate(board: &mut Board, terminal_state: bool) -> i32 {
-        let mut score = Engine::material_score(&board.bitboards, board.turn)
-            + Engine::square_score(&board.bitboards, board.turn);
+        let mut score = Engine::square_score(board.bitboards, board.turn);
         if terminal_state {
             score += match board.get_game_state(false) {
                 State::Checkmate(c) => {
                     if c == board.turn {
                         -20000
-                    } else {
+                    } else { 
                         20000
                     }
                 },
-                State::Draw => -100,
+                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::ThreeFoldRepetition | State::Stalemate => -10000,
                 _ => 0,
             };
         };
 
-        score
-    }
-
-    #[inline(always)]
-    fn material_score(bitboards: &[[Bitboard; 6]; 2], c: Colour) -> i32 {
-        let mut score: i32 = 0;
-        for (colour, bits) in bitboards.iter().enumerate() {
-            for (piece, board) in bits.iter().enumerate() {
-                score += (board.count_ones() * Engine::score(Pieces::from_num(piece).unwrap()))
-                    as i32
-                    * if c as usize == colour { 1 } else { -1 };
-            }
-        }
         score
     }
 
@@ -214,71 +270,31 @@ impl Engine {
     }
 
     #[inline(always)]
-    fn square_score(bitboards: &[[Bitboard; 6]; 2], colour: Colour) -> i32 {
+    fn square_score(bitboards: [[Bitboard; 6]; 2], colour: Colour) -> i32 {
         let mut score = 0;
-        for c in 0..=1 {
-            for piece in 0..=5 {
-                let mut board = bitboards[c][piece];
-                while let Some(sq) = Board::pop_lsb(&mut board) {
-                    let sq = if c == Colour::Black as usize {
-                        Engine::mirror(sq)
-                    } else {
-                        sq
-                    };
-                    score += match Pieces::from_num(piece).unwrap() {
-                        Pieces::Pawn => {
-                            if c == Colour::White as usize {
-                                PAWN_TABLE[sq]
-                            } else {
-                                PAWN_TABLE_BLACK[sq]
-                            }
-                        }
-                        Pieces::Bishop => {
-                            if c == Colour::White as usize {
-                                BISHOP_TABLE[sq]
-                            } else {
-                                BISHOP_TABLE_BLACK[sq]
-                            }
-                        }
-                        Pieces::Knight => {
-                            if c == Colour::White as usize {
-                                KNIGHT_TABLE[sq]
-                            } else {
-                                KNIGHT_TABLE_BLACK[sq]
-                            }
-                        }
-                        Pieces::Rook => {
-                            if c == Colour::White as usize {
-                                ROOK_TABLE[sq]
-                            } else {
-                                ROOK_TABLE_BLACK[sq]
-                            }
-                        }
-                        Pieces::Queen => {
-                            if c == Colour::White as usize {
-                                QUEEN_TABLE[sq]
-                            } else {
-                                QUEEN_TABLE_BLACK[sq]
-                            }
-                        }
-                        Pieces::King => {
-                            if c == Colour::White as usize {
-                                KING_TABLE_MG[sq]
-                            } else {
-                                KING_TABLE_MG_BLACK[sq]
-                            }
-                        }
-                    } * (if c == colour as usize { 1 } else { -1 });
-                }
+        let mut white_bb = bitboards[Colour::White as usize];
+        let mut black_bb = bitboards[Colour::Black as usize];
+
+        for (i, bb) in white_bb.iter_mut().enumerate() {
+            while let Some(sq) = Board::pop_lsb(bb) {
+                score += TABLE[i][sq];
+                score += PIECE_SCORES[i] as i32;
             }
         }
 
-        score
+        for (i, bb) in black_bb.iter_mut().enumerate() {
+            while let Some(sq) = Board::pop_lsb(bb) {
+                score -= TABLE[i][Engine::mirror(sq)];
+                score -= PIECE_SCORES[i] as i32;
+            }
+        }
+
+        score * (if colour == Colour::White { 1 } else { -1 })
     }
 
     #[inline(always)]
     fn mirror(i: usize) -> usize {
-        63 - i
+        i ^ 56
     }
 
     #[inline(always)]
@@ -349,7 +365,7 @@ pub enum Flag {
     Upper,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct TTEntry {
     pub hash: u64,
     pub value: i32,
