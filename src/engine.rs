@@ -66,6 +66,11 @@ impl Engine {
             }
             
             loop {
+                if let Some(move_time) = move_time {
+                    if start.elapsed().as_millis() >= move_time {
+                        break;
+                    }
+                }
                 let mut a = alpha;
                 let b = beta;
                 best_score = MIN;
