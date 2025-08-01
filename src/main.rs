@@ -25,6 +25,7 @@ fn main() {
         let mut board = Board::new(SEED);
         let mut engine = Engine::new(10, 14);
         let stdin = io::stdin();
+        let mut init = false;
 
         for line in stdin.lock().lines() {
             let cmd = line.unwrap();
@@ -38,26 +39,32 @@ fn main() {
                 let mut i = 0;
                 while i < parts.len() {
                     let part = parts[i];
-                    if part == "fen" {
-                        let fen = parts[i+1..i+7].join(" ");
-                        board.load_fen(fen);
-                        i += 7;
-                    }
-                    else if part == "startpos" {
-                        board.load_fen(DEFAULT.to_string());
-                        i += 1;
-                    }
-                    else if part == "moves" {
-                        parse_moves = true;
-                        i += 1;
-                    }
-                    else if parse_moves {
-                        let m = board.move_parser(part.trim().to_string()).unwrap();
-                        board.make_move(m, false).unwrap();
-                        i += 1;
-                    }
-                    else {
-                        i += 1;
+                    if !init {
+                        init = true;
+                        if part == "fen" {
+                            let fen = parts[i+1..i+7].join(" ");
+                            board.load_fen(fen);
+                            i += 7;
+                        }
+                        else if part == "startpos" {
+                            board.load_fen(DEFAULT.to_string());
+                            i += 1;
+                        }
+                        else if part == "moves" {
+                            parse_moves = true;
+                            i += 1;
+                        }
+                        else if parse_moves {
+                            let m = board.move_parser(part.trim().to_string()).unwrap();
+                            board.make_move(m, false).unwrap();
+                            i += 1;
+                        }
+                        else {
+                            i += 1;
+                        }
+                    } else {
+                        let m = board.move_parser(parts.last().unwrap().trim().to_string()).unwrap();
+                        board.make_move(m, false).unwrap(); 
                     }
 
                 }
@@ -101,7 +108,18 @@ fn main() {
                 if let Some(depth) = depth {
                     engine.set_depth(depth);
                     let m = engine.search(&mut board, None, false);
-                    println!("bestmove {}{}", Board::bit_to_algebraic(1u64 << m.from), Board::bit_to_algebraic(1u64 << m.to));
+                    let p = match m.promotion {
+                        Some(p) => match p {
+                            Pieces::Bishop => "b",
+                            Pieces::Knight => "n",
+                            Pieces::Rook => "r",
+                            Pieces::Queen => "q",
+                            _ => ""
+                        },
+                        None => "",
+                    };
+                    board.make_move(m, false).unwrap();
+                    println!("bestmove {}{}{}", Board::bit_to_algebraic(1u64 << m.from), Board::bit_to_algebraic(1u64 << m.to), p);
                 }
                 else {
                     let time_left = if board.turn == Colour::White { wtime } else { btime };
@@ -110,7 +128,18 @@ fn main() {
                     let move_time = time_left / 20 + increment / 2;
 
                     let m = engine.search(&mut board, Some(move_time), false);
-                    println!("bestmove {}{}", Board::bit_to_algebraic(1u64 << m.from), Board::bit_to_algebraic(1u64 << m.to));
+                    let p = match m.promotion {
+                        Some(p) => match p {
+                            Pieces::Bishop => "b",
+                            Pieces::Knight => "n",
+                            Pieces::Rook => "r",
+                            Pieces::Queen => "q",
+                            _ => ""
+                        },
+                        None => "",
+                    };
+                    board.make_move(m, false).unwrap();
+                    println!("bestmove {}{}{}", Board::bit_to_algebraic(1u64 << m.from), Board::bit_to_algebraic(1u64 << m.to), p);
                 }
             }
             else if cmd == "quit" {
