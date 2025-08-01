@@ -60,11 +60,13 @@ fn main() {
                             i += 1;
                         }
                         else {
+                            println!("{}", part);
                             i += 1;
                         }
                     } else {
                         let m = board.move_parser(parts.last().unwrap().trim().to_string()).unwrap();
                         board.make_move(m, false).unwrap(); 
+                        break;
                     }
 
                 }
