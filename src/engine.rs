@@ -114,7 +114,9 @@ impl Engine {
             println!("nmp: {}", nm_counter);
         }
 
-        best_move.unwrap()
+        best_move.unwrap_or_else(|| {
+            moves[0]
+        })
     }
 
     #[inline(always)]
