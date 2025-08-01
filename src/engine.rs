@@ -9,7 +9,7 @@ use std::time::Instant;
 const TABLE_SIZE: usize = 1_usize << 22;
 const MIN: i32 = -300000;
 const MAX: i32 = 300000;
-const ASPIRATION_WINDOW: i32 = 12;
+const ASPIRATION_WINDOW: i32 = 25;
 const MAX_DEPTH: usize = 16;
 const MAX_HISTORY: u32 = 325;
 const KILLER_MOVES: u32 = 200;
@@ -17,7 +17,7 @@ const R: u32 = 2;
 
 pub struct Engine {
     depth: u32,
-    transposition_table: Box<[Option<TTEntry>]>,
+    transposition_table: Box<[TTEntry]>,
     history_table: [[[u32;64];64];2],
     killer_moves: [[Option<Move>; 2];MAX_DEPTH],
 }
@@ -26,7 +26,7 @@ impl Engine {
     pub fn new(depth: u32) -> Engine {
         Engine {
             depth,
-            transposition_table: vec![None; TABLE_SIZE].into_boxed_slice(),
+            transposition_table: vec![TTEntry::default(); TABLE_SIZE].into_boxed_slice(),
             history_table: [[[0;64];64];2],
             killer_moves: [[None; 2];MAX_DEPTH],
         }
@@ -122,7 +122,7 @@ impl Engine {
     #[inline(always)]
     fn generate_moves(&self, board: &mut Board, colour: Colour, depth: Option<usize>) -> Vec<Move> {
         let mut moves = board.get_legal_moves(colour, Some(&self.transposition_table));
-        moves.sort_by(|a, b| {
+        moves.sort_unstable_by(|a, b| {
             let mut b_cmp = b.score + self.history_table[colour as usize][b.from][b.to];
             let mut a_cmp = a.score + self.history_table[colour as usize][a.from][a.to];
 
@@ -160,8 +160,9 @@ impl Engine {
         let original_alpha = alpha;
         let tt_index = Engine::get_index(board.hash);
         let mut replace_tt = true;
+        let entry = &self.transposition_table[tt_index];
 
-        if let Some(entry) = &self.transposition_table[tt_index] {
+        if entry.valid {
             replace_tt = (entry.depth as u32) < depth || entry.hash != board.hash;
             if entry.hash == board.hash && entry.depth as u32 >= depth {
                 match entry.flag {
@@ -173,12 +174,18 @@ impl Engine {
             }
         }
 
+        if depth == 0 || board.state != State::Continue {
+            *counter += 1;
+            return Engine::evaluate(board, board.state != State::Continue);
+        };
+
         let moves = self.generate_moves(board, board.turn, Some(depth as usize));
 
-        if depth == 0 || moves.len() == 0 || board.state != State::Continue {
+        if moves.len() == 0 {
             *counter += 1;
             return Engine::evaluate(board, moves.len() == 0);
         };
+
 
         let mut best_score = MIN;
         let mut best_move = None;
@@ -194,15 +201,28 @@ impl Engine {
             }
         }
 
-        for m in moves {
+        for i in 0..moves.len() {
+            let m = moves[i];
+            let mut reduction = 0;
             board.make_move(m, false).unwrap();
 
-            let eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter);
+            if depth >= 3 && m.capture.is_none() && m.promotion.is_none() && i >= 5 && !board.is_check(board.turn) {
+                reduction = 1;
+            }
+
+            let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter);
+
+            if reduction > 0 && eval > alpha {
+                eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter);
+            }
+
             if eval > best_score {
                 best_score = eval;
                 best_move = Some(m);
             }
-
+            // println!("-----DEBUG------");
+            // println!("{}", board.move_history_to_algebraic());
+            // println!("----------------");
             board.unmake_move().unwrap();
             alpha = std::cmp::max(alpha, best_score);
 
@@ -232,13 +252,13 @@ impl Engine {
                 Flag::Exact
             };
 
-            self.transposition_table[tt_index] = Some(TTEntry::new(
+            self.transposition_table[tt_index] = TTEntry::new(
                 board.hash,
                 best_score,
                 depth as u8,
                 flag,
                 best_move,
-            ));
+            );
         }
 
         best_score
@@ -372,6 +392,7 @@ pub struct TTEntry {
     pub depth: u8,
     pub flag: Flag,
     pub best_move: Option<Move>,
+    pub valid: bool,
 }
 
 impl TTEntry {
@@ -382,6 +403,13 @@ impl TTEntry {
             depth,
             flag,
             best_move,
+            valid: true
         }
+    }
+}
+
+impl Default for TTEntry {
+    fn default() -> Self {
+        Self { hash: Default::default(), value: Default::default(), depth: Default::default(), flag: Flag::Exact, best_move: Default::default(), valid: false }
     }
 }
