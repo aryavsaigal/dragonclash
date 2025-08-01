@@ -34,6 +34,11 @@ fn main() {
             if cmd == "isready" {
                 println!("readyok");
             }
+            else if cmd == "ucinewgame" {
+                board = Board::new(SEED);
+                engine = Engine::new(10, 14);
+                init = false;
+            }
             else if cmd.starts_with("position") {
                 let parts: Vec<&str> = cmd.split_ascii_whitespace().skip(1).collect();
                 let mut parse_moves = false;
