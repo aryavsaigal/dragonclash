@@ -14,7 +14,6 @@ const DEFAULT: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 const SEED: u64 = 180280668239036416;
 fn main() {
     let mut init_command= String::new();
-    print!("(tip: uci / na) > ");
     io::stdout().flush().unwrap();
     std::io::stdin().read_line(&mut init_command).unwrap();
 
