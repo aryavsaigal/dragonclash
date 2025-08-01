@@ -26,8 +26,10 @@ fn main() {
         let stdin = io::stdin();
         let mut init = false;
 
-        for line in stdin.lock().lines() {
-            let cmd = line.unwrap();
+        loop {
+            let mut cmd = String::new();
+            stdin.read_line(&mut cmd).unwrap();
+            cmd = cmd.trim().to_string();
 
             if cmd == "isready" {
                 println!("readyok");
@@ -147,6 +149,7 @@ fn main() {
                 break;
             }
         }
+
     }
     else {
 
