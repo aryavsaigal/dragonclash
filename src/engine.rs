@@ -17,26 +17,33 @@ const R: u32 = 2;
 
 pub struct Engine {
     depth: u32,
+    endgame_depth: u32,
     transposition_table: Box<[TTEntry]>,
     history_table: [[[u32;64];64];2],
     killer_moves: [[Option<Move>; 2];MAX_DEPTH],
 }
 
 impl Engine {
-    pub fn new(depth: u32) -> Engine {
+    pub fn new(depth: u32, endgame_depth: u32) -> Engine {
         Engine {
             depth,
+            endgame_depth,
             transposition_table: vec![TTEntry::default(); TABLE_SIZE].into_boxed_slice(),
             history_table: [[[0;64];64];2],
             killer_moves: [[None; 2];MAX_DEPTH],
         }
     }
 
+    pub fn set_depth(&mut self, depth: u32) {
+        self.depth = depth;
+        self.endgame_depth = depth;
+    }
+
     // fn score_moves(&self, moves: &mut Vec<Move>) {
 
     // }
 
-    pub fn search(&mut self, board: &mut Board) -> Move {
+    pub fn search(&mut self, board: &mut Board, move_time: Option<u128>, debug: bool) -> Move {
         let start = Instant::now();
 
         let mut moves = self.generate_moves(board, board.turn, None);
@@ -46,7 +53,7 @@ impl Engine {
         let mut nm_counter = 0;
         let mut redo = 0;
 
-        for depth in 1..=self.depth {
+        for depth in 1..=(if Engine::endgame(board.bitboards) {self.endgame_depth} else {self.depth}) {
             let mut window = ASPIRATION_WINDOW;
             let mut alpha = if depth > 1 { best_score - window } else { MIN };
             let mut beta = if depth > 1 { best_score + window } else { MAX };
@@ -88,18 +95,24 @@ impl Engine {
                 }
                 break;
             }
-
+            if let Some(move_time) = move_time {
+                if start.elapsed().as_millis() >= move_time {
+                    break;
+                }
+            }
             self.decay_history();
         }
-        let duration = start.elapsed();
-        println!("nodes checked: {nodes_checked}");
-        println!("time taken: {:?}", duration);
-        println!(
-            "nps: {:?}",
-            (nodes_checked as f64 / duration.as_secs_f64()).round() as u64
-        );
-        println!("aspiration rechecked: {}", redo);
-        println!("nmp: {}", nm_counter);
+        if debug {
+            let duration = start.elapsed();
+            println!("nodes checked: {nodes_checked}");
+            println!("time taken: {:?}", duration);
+            println!(
+                "nps: {:?}",
+                (nodes_checked as f64 / duration.as_secs_f64()).round() as u64
+            );
+            println!("aspiration rechecked: {}", redo);
+            println!("nmp: {}", nm_counter);
+        }
 
         best_move.unwrap()
     }
@@ -142,11 +155,25 @@ impl Engine {
     }
 
     #[inline(always)]
-    fn endgame(bb: [[Bitboard; 6]; 2]) -> bool {
-        let white = bb[0][1] | bb[0][2] | bb[0][3] | bb[0][4];
-        let black = bb[1][1] | bb[1][2] | bb[1][3] | bb[1][4];
-        (white | black) == 0
+    pub fn endgame(bb: [[Bitboard; 6]; 2]) -> bool {
+        let mut total_score = 0;
+        for colour in 0..=1 {
+            for piece in 0..=5 {
+                total_score += PIECE_SCORES[piece] * bb[colour][piece].count_ones();
+            }
+        }
+        total_score < 1300 || (bb[0][0] | bb[1][0]).count_ones() < 5
     }
+
+    #[inline(always)]
+    fn is_repetition(board: &mut Board,) -> bool {
+        board.hash_history
+            .iter()
+            .filter(|&&h| h == board.hash)
+            .count()
+            >= 2
+    }
+
 
     fn negamax(
         &mut self,
@@ -174,16 +201,20 @@ impl Engine {
             }
         }
 
+        if Engine::is_repetition(board) {
+            return if board.turn == Colour::White { 10 } else { -10 };
+        }
+
         if depth == 0 || board.state != State::Continue {
             *counter += 1;
-            return Engine::evaluate(board, board.state != State::Continue);
+            return Engine::evaluate(board, board.state != State::Continue, true);
         };
 
         let moves = self.generate_moves(board, board.turn, Some(depth as usize));
 
         if moves.len() == 0 {
             *counter += 1;
-            return Engine::evaluate(board, moves.len() == 0);
+            return Engine::evaluate(board, moves.len() == 0, false);
         };
 
 
@@ -206,7 +237,7 @@ impl Engine {
             let mut reduction = 0;
             board.make_move(m, false).unwrap();
 
-            if depth >= 3 && m.capture.is_none() && m.promotion.is_none() && i >= 5 && !board.is_check(board.turn) {
+            if depth >= 3 && m.capture.is_none() && m.promotion.is_none() && m.score < 150 && !board.is_check(board.turn) {
                 reduction = 1;
             }
 
@@ -220,9 +251,7 @@ impl Engine {
                 best_score = eval;
                 best_move = Some(m);
             }
-            // println!("-----DEBUG------");
-            // println!("{}", board.move_history_to_algebraic());
-            // println!("----------------");
+
             board.unmake_move().unwrap();
             alpha = std::cmp::max(alpha, best_score);
 
@@ -265,10 +294,10 @@ impl Engine {
     }
 
     #[inline(always)]
-    fn evaluate(board: &mut Board, terminal_state: bool) -> i32 {
+    pub fn evaluate(board: &mut Board, terminal_state: bool, validate: bool) -> i32 {
         let mut score = Engine::square_score(board.bitboards, board.turn);
         if terminal_state {
-            score += match board.get_game_state(false) {
+            score += match board.get_game_state(validate) {
                 State::Checkmate(c) => {
                     if c == board.turn {
                         -20000
@@ -276,10 +305,18 @@ impl Engine {
                         20000
                     }
                 },
-                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::ThreeFoldRepetition | State::Stalemate => -10000,
+                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate => 0,
+                State::ThreeFoldRepetition => 0,
                 _ => 0,
             };
         };
+
+        // if board.is_check(board.turn) {
+        //     score -= 200;
+        // }
+        // else if board.is_check(!board.turn) {
+        //     score += 200;
+        // }
 
         score
     }

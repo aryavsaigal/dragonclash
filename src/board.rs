@@ -23,7 +23,6 @@ pub struct Board {
     move_history: Vec<(Move, Castle, Bitboard, usize)>,
     rook_magic_table: Vec<Magic>,
     bishop_magic_table: Vec<Magic>,
-    null_ep: Bitboard,
 }
 
 #[inline(always)]
@@ -72,7 +71,6 @@ impl Board {
             bishop_magic_table: Vec::with_capacity(64),
             hash: 0,
             zobrist_hash: ZobristHashing::new(&mut SplitMix64::new(seed)),
-            null_ep: 0,
         };
 
         b.init();
@@ -484,6 +482,8 @@ impl Board {
                 | (bishop_moves & self.bitboards[!colour as usize][Pieces::Bishop as usize])
                 | ((rook_moves | bishop_moves)
                     & self.bitboards[!colour as usize][Pieces::Queen as usize])
+                | (self.attack_tables[!colour as usize][Pieces::King as usize][sq]
+            & self.bitboards[!colour as usize][Pieces::King as usize])
                 != 0
             {
                 return true;
@@ -515,13 +515,15 @@ impl Board {
             | (bishop_moves & self.bitboards[!colour as usize][Pieces::Bishop as usize])
             | ((rook_moves | bishop_moves)
                 & self.bitboards[!colour as usize][Pieces::Queen as usize])
+            | (self.attack_tables[!colour as usize][Pieces::King as usize][king_sq]
+            & self.bitboards[!colour as usize][Pieces::King as usize])
             != 0
     }
 
     pub fn get_legal_moves(
         &mut self,
         colour: Colour,
-        ttable: Option<&Box<[Option<TTEntry>]>>,
+        ttable: Option<&Box<[TTEntry]>>,
     ) -> Vec<Move> {
         let mut legal_moves = Vec::with_capacity(MAX_MOVES);
 
@@ -541,11 +543,15 @@ impl Board {
                 }
                 if let Some(transposition_table) = ttable {
                     let index = Engine::get_index(self.hash);
-                    if let Some(entry) = &transposition_table[index] {
+                    let entry = &transposition_table[index];
+                    if entry.valid {
                         if entry.hash == self.hash && entry.best_move == Some(*m) {
                             m.score += 20000;
                         }
                     }
+                }
+                if self.is_check(!colour) {
+                    m.score += 200;
                 }
                 legal_moves.push(*m);
             }
@@ -606,13 +612,13 @@ impl Board {
         );
     }
 
-    // pub fn move_history_to_algebraic(&self) -> String {
-    //     let mut h = String::new();
-    //     for (i, history) in self.move_history.iter().enumerate() {
-    //         h = format!("{}{}. {}{}\n", h, i+1, Board::bit_to_algebraic(1u64 << history.0.from), Board::bit_to_algebraic(1u64 << history.0.to));
-    //     }
-    //     h
-    // }
+    pub fn move_history_to_algebraic(&self) -> String {
+        let mut h = String::new();
+        for (i, history) in self.move_history.iter().enumerate() {
+            h = format!("{}{}. {}{}\n", h, i+1, Board::bit_to_algebraic(1u64 << history.0.from), Board::bit_to_algebraic(1u64 << history.0.to));
+        }
+        h
+    }
 
     pub fn perft(&mut self, colour: Colour, depth: usize, table: &mut Box<[Option<TTEntry>]>) -> u64 {
 
@@ -819,20 +825,22 @@ impl Board {
 
     #[inline(always)]
     pub fn white_pieces(&self) -> Bitboard {
-        self.bitboards[Colour::White as usize]
-            .iter()
-            .copied()
-            .reduce(|a, b| a | b)
-            .unwrap()
+        self.bitboards[Colour::White as usize][0]
+            | self.bitboards[Colour::White as usize][1]
+            | self.bitboards[Colour::White as usize][2]
+            | self.bitboards[Colour::White as usize][3]
+            | self.bitboards[Colour::White as usize][4]
+            | self.bitboards[Colour::White as usize][5]
     }
 
     #[inline(always)]
     pub fn black_pieces(&self) -> Bitboard {
-        self.bitboards[Colour::Black as usize]
-            .iter()
-            .copied()
-            .reduce(|a, b| a | b)
-            .unwrap()
+        self.bitboards[Colour::Black as usize][0]
+            | self.bitboards[Colour::Black as usize][1]
+            | self.bitboards[Colour::Black as usize][2]
+            | self.bitboards[Colour::Black as usize][3]
+            | self.bitboards[Colour::Black as usize][4]
+            | self.bitboards[Colour::Black as usize][5]
     }
 
     #[inline(always)]
@@ -962,6 +970,8 @@ impl Board {
                 _ => continue,
             }
         }
+
+        self.hash_history.push(self.hash);
     }
 
     #[inline(always)]
@@ -1318,7 +1328,7 @@ impl Board {
             .push((m, pre_castle_state, old_en_passant, old_half_move));
 
         if (m.from as isize - m.to as isize).abs() == 16 && m.piece.1 == Pieces::Pawn {
-            self.en_passant = (1 as Bitboard) << (m.from + m.to) / 2;
+            self.en_passant = (1 as Bitboard) << ((m.from + m.to) / 2);
             self.hash ^=
                 self.zobrist_hash.en_passant[self.en_passant.trailing_zeros() as usize % 8];
         } else {
@@ -1326,7 +1336,7 @@ impl Board {
         }
 
         if self.half_moves >= 100 {
-            self.state = State::Draw;
+            self.state = State::FiftyMoveRule;
         }
 
         if self.turn == Colour::Black {
@@ -1349,6 +1359,7 @@ impl Board {
     }
 
     pub fn make_null_move(&mut self) {
+        self.move_history.push((Move::new(0, 0, (self.turn, Pieces::None), None, None), Castle::new(), self.en_passant, self.half_moves));
         self.half_moves += 1;
 
         if self.turn == Colour::Black {
@@ -1358,33 +1369,33 @@ impl Board {
             self.hash ^=
                 self.zobrist_hash.en_passant[self.en_passant.trailing_zeros() as usize % 8];
         }
-        self.null_ep = self.en_passant;
         self.en_passant = 0;
 
         if self.half_moves >= 100 {
-            self.state = State::Draw;
+            self.state = State::FiftyMoveRule;
         }
 
         self.turn = !self.turn;
         self.hash ^= self.zobrist_hash.black_to_move;
+        self.hash_history.push(self.hash);
     }
 
     pub fn unmake_null_move(&mut self) {
-        self.half_moves -= 1;
+        let (_, _, ep, hm) = self.move_history.pop().unwrap();
+        self.half_moves = hm;
 
         if !self.turn == Colour::Black {
             self.full_moves -= 1;
         }
 
-        self.en_passant = self.null_ep;
-        if self.en_passant != 0 {
-            self.hash ^=
-                self.zobrist_hash.en_passant[self.en_passant.trailing_zeros() as usize % 8];
-        }
+        self.hash_history.pop();
+
+        self.en_passant = ep;
+
         self.state = State::Continue;
 
         self.turn = !self.turn;
-        self.hash ^= self.zobrist_hash.black_to_move;
+        self.hash = *self.hash_history.last().unwrap();
     }
 
     pub fn unmake_move(&mut self) -> Result<(), String> {
@@ -1395,30 +1406,8 @@ impl Board {
 
         self.hash_history.pop();
 
-        if self.castling_rights.white_king != old_castle.white_king {
-            self.hash ^= self.zobrist_hash.castling_rights[0];
-        }
-        if self.castling_rights.white_queen != old_castle.white_queen {
-            self.hash ^= self.zobrist_hash.castling_rights[1];
-        }
-        if self.castling_rights.black_king != old_castle.black_king {
-            self.hash ^= self.zobrist_hash.castling_rights[2];
-        }
-        if self.castling_rights.black_queen != old_castle.black_queen {
-            self.hash ^= self.zobrist_hash.castling_rights[3];
-        }
-
         self.castling_rights = old_castle;
         self.half_moves = half_move;
-
-        if self.en_passant != 0 {
-            self.hash ^=
-                self.zobrist_hash.en_passant[self.en_passant.trailing_zeros() as usize % 8];
-        }
-
-        if old_en_passant != 0 {
-            self.hash ^= self.zobrist_hash.en_passant[old_en_passant.trailing_zeros() as usize % 8];
-        }
 
         self.en_passant = old_en_passant;
 
@@ -1434,19 +1423,12 @@ impl Board {
             last_move.from,
         );
 
-        self.hash ^= self.zobrist_hash.pieces[last_move.piece.0 as usize]
-            [last_move.piece.1 as usize][last_move.to];
-        self.hash ^= self.zobrist_hash.pieces[last_move.piece.0 as usize]
-            [last_move.piece.1 as usize][last_move.from];
-
         if let Some(piece) = last_move.capture {
             self.pieces[last_move.to] = Some(piece);
             Board::set_bit(
                 &mut self.bitboards[piece.0 as usize][piece.1 as usize],
                 last_move.to,
             );
-
-            self.hash ^= self.zobrist_hash.pieces[piece.0 as usize][piece.1 as usize][last_move.to];
         }
 
         if let Some(promotion) = last_move.promotion {
@@ -1454,9 +1436,6 @@ impl Board {
                 &mut self.bitboards[last_move.piece.0 as usize][promotion as usize],
                 last_move.to,
             );
-
-            self.hash ^= self.zobrist_hash.pieces[last_move.piece.0 as usize][promotion as usize]
-                [last_move.to];
         }
 
         if last_move.en_passant {
@@ -1468,8 +1447,6 @@ impl Board {
                         &mut self.bitboards[Colour::Black as usize][Pieces::Pawn as usize],
                         sq,
                     );
-                    self.hash ^=
-                        self.zobrist_hash.pieces[Colour::Black as usize][Pieces::Pawn as usize][sq];
                 }
                 Colour::Black => {
                     let sq = last_move.to + 8;
@@ -1478,8 +1455,9 @@ impl Board {
                         &mut self.bitboards[Colour::White as usize][Pieces::Pawn as usize],
                         sq,
                     );
-                    self.hash ^=
-                        self.zobrist_hash.pieces[Colour::White as usize][Pieces::Pawn as usize][sq];
+                    if sq == 52 {
+                        panic!("found it lol")
+                    }
                 }
             }
         }
@@ -1497,11 +1475,6 @@ impl Board {
                     &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
                     0,
                 );
-
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::White as usize][Pieces::Rook as usize][3];
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::White as usize][Pieces::Rook as usize][0];
             } else if last_move.to == 6 {
                 self.pieces[5] = None;
                 self.pieces[7] = Some((Colour::White, Pieces::Rook));
@@ -1514,11 +1487,6 @@ impl Board {
                     &mut self.bitboards[Colour::White as usize][Pieces::Rook as usize],
                     7,
                 );
-
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::White as usize][Pieces::Rook as usize][5];
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::White as usize][Pieces::Rook as usize][7];
             } else if last_move.to == 58 {
                 self.pieces[59] = None;
                 self.pieces[56] = Some((Colour::Black, Pieces::Rook));
@@ -1531,11 +1499,6 @@ impl Board {
                     &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
                     56,
                 );
-
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::Black as usize][Pieces::Rook as usize][59];
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::Black as usize][Pieces::Rook as usize][56];
             } else if last_move.to == 62 {
                 self.pieces[61] = None;
                 self.pieces[63] = Some((Colour::Black, Pieces::Rook));
@@ -1548,11 +1511,6 @@ impl Board {
                     &mut self.bitboards[Colour::Black as usize][Pieces::Rook as usize],
                     63,
                 );
-
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::Black as usize][Pieces::Rook as usize][61];
-                self.hash ^=
-                    self.zobrist_hash.pieces[Colour::Black as usize][Pieces::Rook as usize][63];
             }
         }
 
@@ -1569,7 +1527,8 @@ impl Board {
         self.state = State::Continue;
 
         self.turn = !self.turn;
-        self.hash ^= self.zobrist_hash.black_to_move;
+
+        self.hash = *self.hash_history.last().unwrap();
 
         Ok(())
     }
@@ -1682,6 +1641,7 @@ pub enum Pieces {
     Rook,
     Queen,
     King,
+    None
 }
 
 impl Pieces {
@@ -1705,6 +1665,7 @@ impl Pieces {
             Pieces::Queen => "♛",
             Pieces::King => "♚",
             Pieces::Pawn => "♟",
+            _ => ""
         }
     }
 }
@@ -1836,7 +1797,7 @@ impl Castle {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum State {
     Checkmate(Colour),
     Stalemate,
