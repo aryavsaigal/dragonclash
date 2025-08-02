@@ -1,4 +1,4 @@
-use std::i32;
+use std::{i32, time::Duration};
 
 use crate::{
     board::{Bitboard, Board, Colour, Move, Pieces, State},
@@ -43,7 +43,7 @@ impl Engine {
 
     // }
 
-    pub fn search(&mut self, board: &mut Board, move_time: Option<u128>, debug: bool) -> Move {
+    pub fn search(&mut self, board: &mut Board, deadline: Option<Instant>, debug: bool) -> Move {
         let start = Instant::now();
 
         let mut moves = self.generate_moves(board, board.turn, None);
@@ -66,24 +66,24 @@ impl Engine {
             }
             
             loop {
-                if let Some(move_time) = move_time {
-                    if start.elapsed().as_millis() >= move_time {
-                        break;
-                    }
-                }
                 let mut a = alpha;
                 let b = beta;
                 best_score = MIN;
 
                 for m in &moves {
                     board.make_move(*m, false).unwrap();
-                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked, &mut nm_counter);
+                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked, &mut nm_counter, deadline);
                     board.unmake_move().unwrap();
                     if move_evaluation > best_score {
                         best_score = move_evaluation;
                         best_move = Some(*m);
                     }
                     a = std::cmp::max(a, best_score);
+                    if let Some(dl) = deadline {
+                        if Instant::now() >= dl {
+                            return best_move.unwrap_or_else(|| moves[0]);
+                        }
+                    }
                 }
 
                 if best_score <= alpha {
@@ -100,8 +100,8 @@ impl Engine {
                 }
                 break;
             }
-            if let Some(move_time) = move_time {
-                if start.elapsed().as_millis() >= move_time {
+            if let Some(dl) = deadline {
+                if Instant::now() >= dl {
                     break;
                 }
             }
@@ -189,7 +189,8 @@ impl Engine {
         mut alpha: i32,
         beta: i32,
         counter: &mut u64,
-        nm_counter: &mut u64
+        nm_counter: &mut u64,
+        deadline: Option<Instant>
     ) -> i32 {
         let original_alpha = alpha;
         let tt_index = Engine::get_index(board.hash);
@@ -230,7 +231,7 @@ impl Engine {
 
         if depth >= R+1 && !board.is_check(board.turn) && !Engine::endgame(board.bitboards) {
             board.make_null_move();
-            let score = -self.negamax(board, depth - R - 1, -beta, -beta + 1, counter, nm_counter);
+            let score = -self.negamax(board, depth - R - 1, -beta, -beta + 1, counter, nm_counter, deadline);
             board.unmake_null_move();
 
             if score >= beta {
@@ -240,6 +241,11 @@ impl Engine {
         }
 
         for i in 0..moves.len() {
+            if let Some(dl) = deadline {
+                if Instant::now() >= dl {
+                    return best_score;
+                }
+            }
             let m = moves[i];
             let mut reduction = 0;
             board.make_move(m, false).unwrap();
@@ -248,10 +254,10 @@ impl Engine {
                 reduction = 1;
             }
 
-            let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter);
+            let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter, deadline);
 
             if reduction > 0 && eval > alpha {
-                eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter);
+                eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter, deadline);
             }
 
             if eval > best_score {

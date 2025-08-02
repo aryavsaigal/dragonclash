@@ -6,7 +6,7 @@ use board::Board;
 use engine::Engine;
 use std::io::Write;
 use std::io::{self, BufRead};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::board::{Colour, Pieces, State};
 
@@ -84,6 +84,8 @@ fn main() {
                 let mut winc = 0;
                 let mut binc = 0;
                 let mut depth: Option<u32> = None;
+                let mut movetime = None;
+                let mut moves_to_go = None;
                 let mut i = 0;
                 while i < parts.len() {
                     let part = parts[i];
@@ -106,6 +108,14 @@ fn main() {
                     }
                     else if part == "depth" {
                         depth = Some(parts[i+1].parse().unwrap());
+                        i += 2;
+                    }
+                    else if part == "movestogo" {
+                        moves_to_go = Some(parts[i+1].parse().unwrap());
+                        i += 2;
+                    }
+                    else if part == "movetime" {
+                        movetime = Some(parts[i+1].parse().unwrap());
                         i += 2;
                     }
                     else {
@@ -133,9 +143,9 @@ fn main() {
                     let time_left = if board.turn == Colour::White { wtime } else { btime };
                     let increment = if board.turn == Colour::White { winc } else { binc };
 
-                    let move_time = time_left / 20 + increment / 2;
-
-                    let m = engine.search(&mut board, Some(move_time), false);
+                    let move_time = movetime.unwrap_or_else(|| time_left / moves_to_go.unwrap_or(20) + increment / 2);
+                    println!("{:?}", (Instant::now() + Duration::from_millis(move_time as u64)));
+                    let m = engine.search(&mut board, Some(Instant::now() + Duration::from_millis(move_time as u64)), false);
                     let p = match m.promotion {
                         Some(p) => match p {
                             Pieces::Bishop => "b",
