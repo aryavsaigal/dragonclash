@@ -347,14 +347,14 @@ impl Engine {
 
         for (i, bb) in white_bb.iter_mut().enumerate() {
             while let Some(sq) = Board::pop_lsb(bb) {
-                score += TABLE[i][sq];
+                score += TABLE[i][Engine::mirror(sq)];
                 score += PIECE_SCORES[i] as i32;
             }
         }
 
         for (i, bb) in black_bb.iter_mut().enumerate() {
             while let Some(sq) = Board::pop_lsb(bb) {
-                score -= TABLE[i][Engine::mirror(sq)];
+                score -= TABLE[i][sq];
                 score -= PIECE_SCORES[i] as i32;
             }
         }
