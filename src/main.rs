@@ -201,7 +201,7 @@ fn main() {
         loop {
             println!("\x1B[2J\x1B[1;1H");
             board.display();
-            println!("Score: {} | Endgame: {}", Engine::evaluate(&mut board, false, false) * if board.turn == Colour::White { 1 } else { -1 }, Engine::endgame(board.bitboards));
+            println!("Score: {} | Endgame: {}", Engine::evaluate(&mut board, false, false, 0 as i32) * if board.turn == Colour::White { 1 } else { -1 }, Engine::endgame(board.bitboards));
             // board.display_from_bitboards();
             println!("{}{}. {:?} to play", error_message, board.full_moves, board.turn);
     

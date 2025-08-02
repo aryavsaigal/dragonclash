@@ -71,7 +71,7 @@ impl Engine {
 
                 for m in &moves {
                     board.make_move(*m, false).unwrap();
-                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked, &mut nm_counter, deadline);
+                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked, &mut nm_counter, deadline, 1);
                     board.unmake_move().unwrap();
                     if move_evaluation > best_score {
                         best_score = move_evaluation;
@@ -189,7 +189,8 @@ impl Engine {
         beta: i32,
         counter: &mut u64,
         nm_counter: &mut u64,
-        deadline: Option<Instant>
+        deadline: Option<Instant>,
+        ply: i32
     ) -> i32 {
         let original_alpha = alpha;
         let tt_index = Engine::get_index(board.hash);
@@ -214,14 +215,14 @@ impl Engine {
 
         if depth == 0 || board.state != State::Continue {
             *counter += 1;
-            return Engine::evaluate(board, board.state != State::Continue, true);
+            return Engine::evaluate(board, board.state != State::Continue, true, ply+1);
         };
 
         let moves = self.generate_moves(board, board.turn, Some(depth as usize));
 
         if moves.len() == 0 {
             *counter += 1;
-            return Engine::evaluate(board, moves.len() == 0, false);
+            return Engine::evaluate(board, moves.len() == 0, false, ply+1);
         };
 
 
@@ -230,7 +231,7 @@ impl Engine {
 
         if depth >= R+1 && !board.is_check(board.turn) && !Engine::endgame(board.bitboards) {
             board.make_null_move();
-            let score = -self.negamax(board, depth - R - 1, -beta, -beta + 1, counter, nm_counter, deadline);
+            let score = -self.negamax(board, depth - R - 1, -beta, -beta + 1, counter, nm_counter, deadline, ply);
             board.unmake_null_move();
 
             if score >= beta {
@@ -253,10 +254,10 @@ impl Engine {
                 reduction = 1;
             }
 
-            let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter, deadline);
+            let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter, deadline, ply);
 
             if reduction > 0 && eval > alpha {
-                eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter, deadline);
+                eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter, deadline, ply);
             }
 
             if eval > best_score {
@@ -306,19 +307,19 @@ impl Engine {
     }
 
     #[inline(always)]
-    pub fn evaluate(board: &mut Board, terminal_state: bool, validate: bool) -> i32 {
-        let mut score = Engine::square_score(board.bitboards, board.turn);
+    pub fn evaluate(board: &mut Board, terminal_state: bool, validate: bool, ply: i32) -> i32 {
+        let mut score = Engine::square_score(board.bitboards) * if board.turn == Colour::White {1} else {-1};
         if terminal_state {
             score += match board.get_game_state(validate) {
                 State::Checkmate(c) => {
                     if c == board.turn {
-                        -20000
+                        -200000-ply
                     } else { 
-                        20000
+                        200000+ply
                     }
                 },
                 State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate => 0,
-                State::ThreeFoldRepetition => 0,
+                State::ThreeFoldRepetition => -10,
                 _ => 0,
             };
         };
@@ -339,7 +340,7 @@ impl Engine {
     }
 
     #[inline(always)]
-    fn square_score(bitboards: [[Bitboard; 6]; 2], colour: Colour) -> i32 {
+    fn square_score(bitboards: [[Bitboard; 6]; 2]) -> i32 {
         let mut score = 0;
         let mut white_bb = bitboards[Colour::White as usize];
         let mut black_bb = bitboards[Colour::Black as usize];
@@ -358,7 +359,7 @@ impl Engine {
             }
         }
 
-        score * (if colour == Colour::White { 1 } else { -1 })
+        score
     }
 
     #[inline(always)]
