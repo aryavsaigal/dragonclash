@@ -36,7 +36,6 @@ impl Engine {
 
     pub fn set_depth(&mut self, depth: u32) {
         self.depth = depth;
-        self.endgame_depth = depth;
     }
 
     // fn score_moves(&self, moves: &mut Vec<Move>) {
