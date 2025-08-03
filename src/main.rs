@@ -43,10 +43,10 @@ fn main() {
                 let parts: Vec<&str> = cmd.split_ascii_whitespace().skip(1).collect();
                 let mut parse_moves = false;
                 let mut i = 0;
-                while i < parts.len() {
-                    let part = parts[i];
-                    if !init {
-                        init = true;
+                if !init {
+                    init = true;
+                    while i < parts.len() {
+                        let part = parts[i];
                         if part == "fen" {
                             let fen = parts[i+1..i+7].join(" ");
                             board.load_fen(fen);
@@ -69,12 +69,11 @@ fn main() {
                             println!("{}", part);
                             i += 1;
                         }
-                    } else {
-                        let m = board.move_parser(parts.last().unwrap().trim().to_string()).unwrap();
-                        board.make_move(m, false).unwrap(); 
-                        break;
                     }
-
+                } else {
+                    let m = board.move_parser(parts.last().unwrap().trim().to_string()).unwrap();
+                    board.make_move(m, false).unwrap(); 
+                    break;
                 }
             }
             else if cmd.starts_with("go") {
