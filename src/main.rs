@@ -26,7 +26,7 @@ fn main() {
         let stdin = io::stdin();
         let mut init = false;
 
-        loop {
+        'm: loop {
             let mut cmd = String::new();
             stdin.read_line(&mut cmd).unwrap();
             cmd = cmd.trim().to_string();
@@ -73,7 +73,6 @@ fn main() {
                 } else {
                     let m = board.move_parser(parts.last().unwrap().trim().to_string()).unwrap();
                     board.make_move(m, false).unwrap(); 
-                    break;
                 }
             }
             else if cmd.starts_with("go") {
@@ -116,6 +115,12 @@ fn main() {
                     else if part == "movetime" {
                         movetime = Some(parts[i+1].parse().unwrap());
                         i += 2;
+                    }
+                    else if part == "perft" {
+                        let perft_depth = parts[i+1].parse().unwrap();
+                        board.load_fen(DEFAULT.to_string());
+                        board.verbose_perft(perft_depth);
+                        continue 'm;
                     }
                     else {
                         i += 1;

@@ -613,7 +613,7 @@ impl Board {
         println!("time taken: {:?}", duration);
         println!(
             "nps: {:?}",
-            counter / (duration.as_secs_f64()).round() as u64
+            counter / (duration.as_secs_f64()).ceil() as u64
         );
     }
 
