@@ -22,7 +22,7 @@ fn main() {
         println!("id author Aryav");
         println!("uciok");
         let mut board = Board::new(SEED);
-        let mut engine = Engine::new(10, 14);
+        let mut engine = Engine::new(15, 15);
         let stdin = io::stdin();
         let mut init = false;
 
@@ -36,7 +36,7 @@ fn main() {
             }
             else if cmd == "ucinewgame" {
                 board = Board::new(SEED);
-                engine = Engine::new(10, 14);
+                engine = Engine::new(15, 15);
                 init = false;
             }
             else if cmd.starts_with("position") {
@@ -125,7 +125,7 @@ fn main() {
 
                 if let Some(depth) = depth {
                     engine.set_depth(depth);
-                    let m = engine.search(&mut board, None, false);
+                    let m = engine.search(&mut board, None, true);
                     let p = match m.promotion {
                         Some(p) => match p {
                             Pieces::Bishop => "b",
@@ -144,8 +144,8 @@ fn main() {
                     let increment = if board.turn == Colour::White { winc } else { binc };
 
                     let move_time = movetime.unwrap_or_else(|| time_left / moves_to_go.unwrap_or(20) + increment / 2);
-                    println!("{:?}", (Instant::now() + Duration::from_millis(move_time as u64)));
-                    let m = engine.search(&mut board, Some(Instant::now() + Duration::from_millis(move_time as u64)), false);
+                    println!("Time per move: {:?}", Duration::from_millis(move_time as u64));
+                    let m = engine.search(&mut board, Some(Instant::now() + Duration::from_millis(move_time as u64)), true);
                     let p = match m.promotion {
                         Some(p) => match p {
                             Pieces::Bishop => "b",
@@ -170,7 +170,7 @@ fn main() {
 
         println!("Initialising board...");
         let mut board = Board::new(SEED);
-        let mut engine = Engine::new(10, 14);
+        let mut engine = Engine::new(15, 15);
         let mut user_colour = Colour::White;
         let mut ai = false;
         board.load_fen(DEFAULT.to_string());
@@ -206,12 +206,12 @@ fn main() {
             println!("{}{}. {:?} to play", error_message, board.full_moves, board.turn);
     
             if ai {
-                let m = engine.search(&mut board, None, true);
+                let m = engine.search(&mut board, Some(Instant::now() + Duration::from_secs(4)), true);
                 board.make_move(m, false).unwrap();
             }
             else {
                 if board.turn == !user_colour {
-                    let m = engine.search(&mut board, None, true);
+                    let m = engine.search(&mut board, Some(Instant::now() + Duration::from_secs(5)), true);
                     board.make_move(m, false).unwrap();
                 } else {
                     let mut m = String::new();

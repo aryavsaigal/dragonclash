@@ -524,6 +524,7 @@ impl Board {
         &mut self,
         colour: Colour,
         ttable: Option<&Box<[TTEntry]>>,
+        quiescence: bool,
     ) -> Vec<Move> {
         let mut legal_moves = Vec::with_capacity(MAX_MOVES);
 
@@ -532,6 +533,10 @@ impl Board {
         }
 
         let mut pseudo_legal_moves = self.get_pseudo_legal_moves(colour);
+
+        if quiescence {
+            pseudo_legal_moves.retain(|m| m.capture.is_some() || m.promotion.is_some());
+        }
 
         for m in &mut pseudo_legal_moves {
             self.make_move(*m, false).unwrap();
@@ -1128,7 +1133,7 @@ impl Board {
         }
 
         if validate {
-            if !self.get_legal_moves(m.piece.0, None).contains(&m) {
+            if !self.get_legal_moves(m.piece.0, None, false).contains(&m) {
                 return Err("Invalid move".to_string());
             };
         }
@@ -1538,7 +1543,7 @@ impl Board {
             return self.state;
         }
         if validate_no_moves {
-            if self.get_legal_moves(self.turn, None).len() != 0 {
+            if self.get_legal_moves(self.turn, None, false).len() != 0 {
                 return State::Continue;
             }
         }
