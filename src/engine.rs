@@ -351,7 +351,7 @@ impl Engine {
     pub fn evaluate(board: &mut Board, terminal_state: bool, validate: bool, ply: i32) -> i32 {
         let mut score = Engine::square_score(board.bitboards) * if board.turn == Colour::White {1} else {-1};
         if terminal_state {
-            score += match board.get_game_state(validate) {
+            score = match board.get_game_state(validate) {
                 State::Checkmate(c) => {
                     if c == board.turn {
                         -300000-ply
@@ -359,9 +359,8 @@ impl Engine {
                         300000+ply
                     }
                 },
-                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate => 0,
-                State::ThreeFoldRepetition => -10,
-                _ => 0,
+                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate | State::ThreeFoldRepetition => 0,
+                State::Continue => score,
             };
         };
 
