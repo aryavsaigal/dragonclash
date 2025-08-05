@@ -22,7 +22,7 @@ fn main() {
         println!("id author Aryav");
         println!("uciok");
         let mut board = Board::new(SEED);
-        let mut engine = Engine::new(15, 15);
+        let mut engine = Engine::new(64, 64);
         let stdin = io::stdin();
         let mut init = false;
 
@@ -36,7 +36,7 @@ fn main() {
             }
             else if cmd == "ucinewgame" {
                 board = Board::new(SEED);
-                engine = Engine::new(15, 15);
+                engine = Engine::new(64, 64);
                 init = false;
             }
             else if cmd.starts_with("position") {
@@ -171,10 +171,9 @@ fn main() {
 
     }
     else {
-
         println!("Initialising board...");
         let mut board = Board::new(SEED);
-        let mut engine = Engine::new(15, 15);
+        let mut engine = Engine::new(64, 64);
         let mut user_colour = Colour::White;
         let mut ai = false;
         board.load_fen(DEFAULT.to_string());
@@ -210,7 +209,7 @@ fn main() {
             println!("{}{}. {:?} to play", error_message, board.full_moves, board.turn);
     
             if ai {
-                let m = engine.search(&mut board, Some(Instant::now() + Duration::from_secs(4)), true);
+                let m = engine.search(&mut board, Some(Instant::now() + Duration::from_millis(100)), false);
                 board.make_move(m, false).unwrap();
             }
             else {

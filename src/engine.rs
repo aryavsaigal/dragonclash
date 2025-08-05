@@ -10,7 +10,7 @@ const TABLE_SIZE: usize = 1_usize << 22;
 const MIN: i32 = -300000;
 const MAX: i32 = 300000;
 const ASPIRATION_WINDOW: i32 = 25;
-const MAX_DEPTH: usize = 16;
+const MAX_DEPTH: usize = 64;
 const MAX_HISTORY: u32 = 325;
 const KILLER_MOVES: u32 = 200;
 const R: u32 = 2;
@@ -21,6 +21,7 @@ pub struct Engine {
     transposition_table: Box<[TTEntry]>,
     history_table: [[[u32;64];64];2],
     killer_moves: [[Option<Move>; 2];MAX_DEPTH],
+    pv_table: [Option<Move>; MAX_DEPTH]
 }
 
 impl Engine {
@@ -31,11 +32,13 @@ impl Engine {
             transposition_table: vec![TTEntry::default(); TABLE_SIZE].into_boxed_slice(),
             history_table: [[[0;64];64];2],
             killer_moves: [[None; 2];MAX_DEPTH],
+            pv_table: [None; MAX_DEPTH]
         }
     }
 
     pub fn set_depth(&mut self, depth: u32) {
         self.depth = depth;
+        self.endgame_depth = depth;
     }
 
     // fn score_moves(&self, moves: &mut Vec<Move>) {
@@ -52,6 +55,7 @@ impl Engine {
         let mut nm_counter = 0;
         let mut quiescence_counter = 0;
         let mut redo = 0;
+        let mut max_depth = 0;
 
         for depth in 1..=(if Engine::endgame(board.bitboards) {self.endgame_depth} else {self.depth}) {
             let mut window = ASPIRATION_WINDOW;
@@ -64,6 +68,8 @@ impl Engine {
                     moves.insert(0, swap);
                 }
             }
+
+            max_depth = depth;
             
             'm: loop {
                 let mut a = alpha;
@@ -106,7 +112,9 @@ impl Engine {
                 }
             }
             self.decay_history();
-            println!("Depth {} complete in {:?}", depth, start.elapsed());
+            if debug {
+                println!("Depth {} complete in {:?}", depth, start.elapsed());
+            }
         }
         if debug {
             let duration = start.elapsed();
@@ -120,6 +128,7 @@ impl Engine {
             println!("nmp: {}", nm_counter);
             println!("quiescence: {}", quiescence_counter);
         }
+        println!("Max Depth: {}", max_depth);
 
         best_move.unwrap_or_else(|| {
             moves[0]
@@ -288,8 +297,8 @@ impl Engine {
             let mut reduction = 0;
             board.make_move(m, false).unwrap();
 
-            if depth >= 3 && m.capture.is_none() && m.promotion.is_none() && m.score < 150 && !board.is_check(board.turn) {
-                reduction = 1;
+            if depth >= 3 && m.capture.is_none() && m.promotion.is_none() && m.score < 150 && !Engine::endgame(board.bitboards) && !board.is_check(board.turn) && !board.is_check(!board.turn) {
+                reduction = 2;
             }
 
             let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter, quiescence_counter, deadline, ply);
@@ -340,10 +349,10 @@ impl Engine {
                 best_move,
             );
         }
-        if Engine::is_repetition(board) {
-            // best_score -= if board.turn == Colour::White { 50 } else { -50 };
-            best_score -= 50;
-        }
+        // if Engine::is_repetition(board) {
+        //     // best_score -= if board.turn == Colour::White { 50 } else { -50 };
+        //     best_score -= 50;
+        // }
         best_score
     }
 
@@ -354,12 +363,12 @@ impl Engine {
             score = match board.get_game_state(validate) {
                 State::Checkmate(c) => {
                     if c == board.turn {
-                        -300000-ply
+                        -300000+ply
                     } else { 
-                        300000+ply
+                        300000-ply
                     }
                 },
-                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate | State::ThreeFoldRepetition => 0,
+                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate | State::ThreeFoldRepetition => -500,
                 State::Continue => score,
             };
         };
@@ -384,17 +393,28 @@ impl Engine {
         let mut score = 0;
         let mut white_bb = bitboards[Colour::White as usize];
         let mut black_bb = bitboards[Colour::Black as usize];
+        let endgame = Engine::endgame(bitboards);
 
         for (i, bb) in white_bb.iter_mut().enumerate() {
             while let Some(sq) = Board::pop_lsb(bb) {
-                score += TABLE[i][Engine::mirror(sq)];
+                if i == 5 && endgame {
+                    score += KING_ENDGAME[Engine::mirror(sq)]
+                }
+                else {
+                    score += TABLE[i][Engine::mirror(sq)];
+                }
                 score += PIECE_SCORES[i] as i32;
             }
         }
 
         for (i, bb) in black_bb.iter_mut().enumerate() {
             while let Some(sq) = Board::pop_lsb(bb) {
-                score -= TABLE[i][sq];
+                if i == 5 && endgame {
+                    score -= KING_ENDGAME[sq]
+                }
+                else {
+                    score -= TABLE[i][sq];
+                }
                 score -= PIECE_SCORES[i] as i32;
             }
         }
