@@ -979,6 +979,60 @@ impl Board {
         self.hash_history.push(self.hash);
     }
 
+    // pub fn export_fen(&self) -> String {
+    //     let mut fen = String::new();
+    //     for (j, pieces) in self.pieces.chunks(8).rev().enumerate() {
+    //         let mut file = -1;
+    //         for (i, piece) in pieces.iter().enumerate() {
+    //             if piece.is_some() && file > 0 {
+    //                 fen += &file.to_string();
+    //                 file = 0;
+
+    //             }
+    //             else {
+    //                 file += 1;
+    //             }
+
+
+    //             if let Some(p) = piece {
+    //                 fen += &map_piece(p.0, p.1).to_string();
+    //             }
+    //         }
+    //         if j < 7 { fen += "/"; }
+    //     }
+    //     fen += &format!(" {}", if self.turn == Colour::White { "w" } else { "b" });
+
+    //     let mut castling = String::new();
+    //     if self.castling_rights.white_king != 0 {
+    //         castling.push('K');
+    //     }
+    //     if self.castling_rights.white_queen != 0 {
+    //         castling.push('Q');
+    //     }
+    //     if self.castling_rights.black_king != 0 {
+    //         castling.push('k');
+    //     }
+    //     if self.castling_rights.black_queen != 0 {
+    //         castling.push('q');
+    //     }
+    //     if castling.is_empty() {
+    //         castling.push('-');
+    //     }
+
+    //     fen += &format!(" {}", castling);
+
+    //    if self.en_passant != 0 {
+    //     fen += &format!(" {}", Board::bit_to_algebraic(self.en_passant));
+    //    }
+    //    else {
+    //     fen += " -";
+    //    }
+
+    //    fen += &format!(" {} {}", self.half_moves, self.full_moves);
+
+    //     fen
+    // }
+
     #[inline(always)]
     pub fn square_colour(sq: usize) -> Colour {
         let rank = sq / 8;
@@ -1572,6 +1626,24 @@ fn map_char(c: char) -> (Colour, Pieces) {
         'q' => (Colour::Black, Pieces::Queen),
         'k' => (Colour::Black, Pieces::King),
         _ => panic!("Invalid FEN piece character: {}", c),
+    }
+}
+
+fn map_piece(colour: Colour, piece: Pieces) -> char {
+    match (colour, piece) {
+        (Colour::White, Pieces::Pawn) => 'P',
+        (Colour::White, Pieces::Knight) => 'N',
+        (Colour::White, Pieces::Bishop) => 'B',
+        (Colour::White, Pieces::Rook) => 'R',
+        (Colour::White, Pieces::Queen) => 'Q',
+        (Colour::White, Pieces::King) => 'K',
+        (Colour::Black, Pieces::Pawn) => 'p',
+        (Colour::Black, Pieces::Knight) => 'n',
+        (Colour::Black, Pieces::Bishop) => 'b',
+        (Colour::Black, Pieces::Rook) => 'r',
+        (Colour::Black, Pieces::Queen) => 'q',
+        (Colour::Black, Pieces::King) => 'k',
+        _ => panic!("Invalid piece for FEN export: {:?} {:?}", colour, piece),
     }
 }
 

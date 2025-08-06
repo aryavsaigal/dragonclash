@@ -7,8 +7,8 @@ use crate::{
 use std::time::Instant;
 
 const TABLE_SIZE: usize = 1_usize << 22;
-const MIN: i32 = -300000;
-const MAX: i32 = 300000;
+const MIN: i32 = -500000;
+const MAX: i32 = 500000;
 const ASPIRATION_WINDOW: i32 = 25;
 const MAX_DEPTH: usize = 64;
 const MAX_HISTORY: u32 = 325;
@@ -21,7 +21,6 @@ pub struct Engine {
     transposition_table: Box<[TTEntry]>,
     history_table: [[[u32;64];64];2],
     killer_moves: [[Option<Move>; 2];MAX_DEPTH],
-    pv_table: [Option<Move>; MAX_DEPTH]
 }
 
 impl Engine {
@@ -32,7 +31,6 @@ impl Engine {
             transposition_table: vec![TTEntry::default(); TABLE_SIZE].into_boxed_slice(),
             history_table: [[[0;64];64];2],
             killer_moves: [[None; 2];MAX_DEPTH],
-            pv_table: [None; MAX_DEPTH]
         }
     }
 
@@ -41,8 +39,12 @@ impl Engine {
         self.endgame_depth = depth;
     }
 
-    // fn score_moves(&self, moves: &mut Vec<Move>) {
-
+    // pub fn render_pv(&self) -> String {
+    //     let mut out = String::new();
+    //     for m in &self.pv_table[0] {
+    //         out = format!("{}{}{} ", out, Board::bit_to_algebraic(1 << m.from), Board::bit_to_algebraic(1 << m.to));
+    //     }
+    //     out
     // }
 
     pub fn search(&mut self, board: &mut Board, deadline: Option<Instant>, debug: bool) -> Move {
@@ -78,11 +80,12 @@ impl Engine {
 
                 for m in &moves {
                     board.make_move(*m, false).unwrap();
-                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked, &mut nm_counter, &mut quiescence_counter, deadline, 1);
+                    let move_evaluation = -self.negamax(board, depth - 1, -b, -a, &mut nodes_checked, &mut nm_counter, &mut quiescence_counter, deadline, 2);
                     board.unmake_move().unwrap();
                     if move_evaluation > best_score {
                         best_score = move_evaluation;
                         best_move = Some(*m);
+
                     }
                     a = std::cmp::max(a, best_score);
                     if let Some(dl) = deadline {
@@ -113,22 +116,32 @@ impl Engine {
             }
             self.decay_history();
             if debug {
-                println!("Depth {} complete in {:?}", depth, start.elapsed());
+                // println!("Depth {} complete in {:?}", depth, start.elapsed());
             }
         }
         if debug {
             let duration = start.elapsed();
-            println!("nodes checked: {nodes_checked}");
-            println!("time taken: {:?}", duration);
-            println!(
-                "nps: {:?}",
-                (nodes_checked as f64 / duration.as_secs_f64()).round() as u64
-            );
-            println!("aspiration rechecked: {}", redo);
-            println!("nmp: {}", nm_counter);
-            println!("quiescence: {}", quiescence_counter);
+            // println!("best score: {}", best_score);
+            // println!("nodes checked: {nodes_checked}");
+            // println!("time taken: {:?}", duration);
+            // println!(
+            //     "nps: {:?}",
+            //     (nodes_checked as f64 / duration.as_secs_f64()).round() as u64
+            // );
+            // println!("aspiration rechecked: {}", redo);
+            // println!("nmp: {}", nm_counter);
+            // println!("quiescence: {}", quiescence_counter);
+            let mut s = "cp";
+            let mut e = Engine::evaluate(board, false, true, 0);
+            if best_score.abs() > 399000 {
+                s = "mate";
+                e = best_score.signum() * (400000-best_score.abs());
+                println!("debug: {}", best_score);
+            } 
+            if !best_move.is_none() { println!("info depth {} score {} nodes {} nps {} time {} pv {}", max_depth, format!("{} {}", s, e), nodes_checked, (nodes_checked as f64 / duration.as_secs_f64()).round() as u64, duration.as_millis(), format!("{}{}", Board::bit_to_algebraic(1 << best_move.unwrap().from), Board::bit_to_algebraic(1 << best_move.unwrap().to))) };
+            // println!("{}", board.export_fen());
         }
-        println!("Max Depth: {}", max_depth);
+        // println!("Max Depth: {}", max_depth);
 
         best_move.unwrap_or_else(|| {
             moves[0]
@@ -151,16 +164,17 @@ impl Engine {
     }
 
     fn quiescence_search(&self, board: &mut Board, mut alpha: i32, beta: i32, ply: i32, counter: &mut u64, depth: Option<u32>) -> i32 {
-        let eval = Engine::evaluate(board, board.state != State::Continue, true, ply);
+        *counter += 1;
+        let mut best_value = Engine::evaluate(board, board.state != State::Continue, true, ply);
 
-        if eval >= beta {
+        if best_value >= beta {
             return beta;
         }
 
         let mut new_depth = None;
 
-        if eval > alpha {
-            alpha = eval;
+        if best_value > alpha {
+            alpha = best_value;
         }
 
         if let Some(d) = depth {
@@ -177,13 +191,16 @@ impl Engine {
             board.unmake_move().unwrap();
 
             if score >= beta {
-                return beta;
+                return score;
             }
             if score > alpha {
                 alpha = score;
             }
+
+            if score > best_value {
+                best_value = score;
+            }
         }
-        *counter += 1;
         alpha
 
     }
@@ -262,14 +279,14 @@ impl Engine {
 
         if depth == 0 || board.state != State::Continue {
             *counter += 1;
-            return self.quiescence_search(board, alpha, beta, ply+1, quiescence_counter, Some(6));
+            return self.quiescence_search(board, alpha, beta, ply, quiescence_counter, None);
         };
 
         let moves = self.generate_moves(board, board.turn, Some(depth as usize), false);
 
         if moves.len() == 0 {
             *counter += 1;
-            return Engine::evaluate(board, moves.len() == 0, false, ply+1);
+            return Engine::evaluate(board, moves.len() == 0, false, ply);
         };
 
 
@@ -278,7 +295,7 @@ impl Engine {
 
         if depth >= R+1 && !board.is_check(board.turn) && !Engine::endgame(board.bitboards) {
             board.make_null_move();
-            let score = -self.negamax(board, depth - R - 1, -beta, -beta + 1, counter, nm_counter, quiescence_counter, deadline, ply);
+            let score = -self.negamax(board, depth - R - 1, -beta, -beta + 1, counter, nm_counter, quiescence_counter, deadline, ply+1);
             board.unmake_null_move();
 
             if score >= beta {
@@ -288,23 +305,18 @@ impl Engine {
         }
 
         for i in 0..moves.len() {
-            if let Some(dl) = deadline {
-                if Instant::now() >= dl {
-                    return best_score;
-                }
-            }
             let m = moves[i];
             let mut reduction = 0;
             board.make_move(m, false).unwrap();
 
-            if depth >= 3 && m.capture.is_none() && m.promotion.is_none() && m.score < 150 && !Engine::endgame(board.bitboards) && !board.is_check(board.turn) && !board.is_check(!board.turn) {
+            if depth >= 3 && m.capture.is_none() && m.promotion.is_none() && m.score == 0 && !Engine::endgame(board.bitboards) && !board.is_check(board.turn) && !board.is_check(!board.turn) {
                 reduction = 2;
             }
 
-            let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter, quiescence_counter, deadline, ply);
+            let mut eval = -self.negamax(board, depth - 1 - reduction, -beta, -alpha, counter, nm_counter, quiescence_counter, deadline, ply+1);
 
             if reduction > 0 && eval > alpha {
-                eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter, quiescence_counter, deadline, ply);
+                eval = -self.negamax(board, depth - 1, -beta, -alpha, counter, nm_counter, quiescence_counter, deadline, ply+1);
             }
 
             if eval > best_score {
@@ -329,6 +341,11 @@ impl Engine {
                     }
                 }
                 break;
+            }
+            if let Some(dl) = deadline {
+                if Instant::now() >= dl {
+                    return best_score;
+                }
             }
         }
 
@@ -363,12 +380,12 @@ impl Engine {
             score = match board.get_game_state(validate) {
                 State::Checkmate(c) => {
                     if c == board.turn {
-                        -300000+ply
+                        -400000+ply
                     } else { 
-                        300000-ply
+                        400000-ply
                     }
                 },
-                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate | State::ThreeFoldRepetition => -500,
+                State::Draw | State::FiftyMoveRule | State::InsufficientMaterial | State::Stalemate | State::ThreeFoldRepetition => 0,
                 State::Continue => score,
             };
         };
