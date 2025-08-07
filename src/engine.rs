@@ -406,7 +406,7 @@ impl Engine {
 
     #[inline(always)]
     pub fn mvv_lva_score(attacker: Pieces, victim: Pieces) -> u32 {
-        PIECE_SCORES[victim as usize] + (6 - attacker as u32) * 10
+        PIECE_SCORES[victim as usize] * 10 - (attacker as u32)
     }
 
     #[inline(always)]
