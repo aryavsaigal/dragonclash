@@ -22,7 +22,7 @@ fn main() {
         println!("id author Aryav");
         println!("uciok");
         let mut board = Board::new(SEED);
-        let mut engine = Engine::new(10, 10);
+        let mut engine = Engine::new(20, 20);
         let stdin = io::stdin();
         let mut init = false;
 
@@ -36,7 +36,7 @@ fn main() {
             }
             else if cmd == "ucinewgame" {
                 board = Board::new(SEED);
-                engine = Engine::new(64, 64);
+                engine = Engine::new(20, 20);
                 init = false;
             }
             else if cmd.starts_with("position") {
@@ -173,11 +173,11 @@ fn main() {
     else {
         println!("Initialising board...");
         let mut board = Board::new(SEED);
-        let mut engine = Engine::new(10, 10);
+        let mut engine = Engine::new(20, 20);
         let mut user_colour = Colour::White;
         let mut ai = false;
-        // board.load_fen(DEFAULT.to_string());
-        board.load_fen("8/8/8/3k4/8/8/8/2K3BB w - - 0 1".to_string());
+        board.load_fen(DEFAULT.to_string());
+        // board.load_fen("8/8/8/3k4/8/8/8/2K3BB w - - 0 1".to_string());
         loop {
             let mut side = String::new();
             print!("Choose side (w/b/ai) > ");

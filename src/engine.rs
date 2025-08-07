@@ -344,7 +344,11 @@ impl Engine {
             }
             if let Some(dl) = deadline {
                 if Instant::now() >= dl {
-                    return best_score;
+                    return if best_score == MIN {
+                        alpha
+                    } else {
+                        best_score
+                    }
                 }
             }
         }
