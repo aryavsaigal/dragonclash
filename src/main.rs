@@ -210,7 +210,7 @@ fn main() {
             println!("{}{}. {:?} to play", error_message, board.full_moves, board.turn);
     
             if ai {
-                let m = engine.search(&mut board, None, true);
+                let m = engine.search(&mut board, Some(Instant::now() + Duration::from_millis(200)), true);
                 board.make_move(m, false).unwrap();
             }
             else {

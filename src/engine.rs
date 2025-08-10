@@ -13,6 +13,7 @@ const ASPIRATION_WINDOW: i32 = 25;
 const MAX_DEPTH: usize = 64;
 const MAX_HISTORY: u32 = 325;
 const KILLER_MOVES: u32 = 200;
+const FUTILITY_MARGIN: [i32; 3] = [0, 200, 300]; 
 const R: u32 = 2;
 
 pub struct Engine {
@@ -289,7 +290,6 @@ impl Engine {
             return Engine::evaluate(board, moves.len() == 0, false, ply);
         };
 
-
         let mut best_score = MIN;
         let mut best_move = None;
 
@@ -304,8 +304,20 @@ impl Engine {
             }
         }
 
+        let static_eval = Engine::evaluate(board, board.state != State::Continue, true, ply);
+
         for i in 0..moves.len() {
             let m = moves[i];
+
+            if depth <= 2 
+                && !board.is_check(board.turn) 
+                && m.capture.is_none()
+                && m.promotion.is_none()
+                && static_eval + FUTILITY_MARGIN[depth as usize] <= alpha
+            {
+                continue;
+            }
+
             let mut reduction = 0;
             board.make_move(m, false).unwrap();
 
@@ -352,6 +364,11 @@ impl Engine {
                 }
             }
         }
+
+        best_score = match best_score {
+            MIN => alpha,
+            _ => best_score
+        };
 
         if replace_tt {
             let flag = if best_score <= original_alpha {
