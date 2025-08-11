@@ -134,7 +134,7 @@ impl Engine {
             // println!("nmp: {}", nm_counter);
             // println!("quiescence: {}", quiescence_counter);
             let mut s = "cp";
-            let mut e = Engine::evaluate(board, false, true, 0);
+            let mut e = Engine::evaluate(board, false, true, 0) * if board.turn == Colour::White { 1 } else { -1 };
             if best_score.abs() > 399000 {
                 s = "mate";
                 e = best_score.signum() * (400000-best_score.abs());
