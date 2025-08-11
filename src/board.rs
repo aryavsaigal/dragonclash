@@ -591,7 +591,7 @@ impl Board {
         let colour = self.turn;
         let moves = self.get_legal_moves_perft(colour);
         let mut counter = 0;
-        let mut table = vec![None; 1_usize << 22].into_boxed_slice();
+        let mut table = vec![None; crate::engine::TABLE_SIZE].into_boxed_slice();
 
         for m in moves {
             let mut node_counter = 0;
@@ -1046,7 +1046,7 @@ impl Board {
     }
 
     pub fn display(&mut self) {
-        let last_move = self.move_history.last();
+        let last_move = self.move_history.last().cloned();
         for rank in (0..=7).rev() {
             print!("\x1b[38;5;15m\x1b[48;5;236m{} \x1b[0m", rank + 1);
             for file in 0..=7 {
@@ -1066,6 +1066,14 @@ impl Board {
                         highlight = "\x1b[48;2;245;220;120m"
                     }
                 }
+
+                if let Some((c, Pieces::King)) = self.pieces[Board::get_bit_position(rank, file)] {
+                    if self.is_check(c) {
+                        highlight = "\x1b[48;2;180;30;30m";
+                    }
+                }
+
+
                 print!("{}{} \x1b[0m", highlight, symbol);
             }
             println!();

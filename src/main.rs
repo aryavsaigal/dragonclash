@@ -208,6 +208,7 @@ fn main() {
             println!("Score: {} | Endgame: {}", Engine::evaluate(&mut board, false, false, 0 as i32) * if board.turn == Colour::White { 1 } else { -1 }, Engine::endgame(board.bitboards));
             // board.display_from_bitboards();
             println!("{}{}. {:?} to play", error_message, board.full_moves, board.turn);
+            error_message = String::new();
     
             if ai {
                 let m = engine.search(&mut board, Some(Instant::now() + Duration::from_millis(200)), true);

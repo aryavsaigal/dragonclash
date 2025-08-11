@@ -6,7 +6,7 @@ use crate::{
 };
 use std::time::Instant;
 
-const TABLE_SIZE: usize = 1_usize << 22;
+pub const TABLE_SIZE: usize = 1_usize << 23;
 const MIN: i32 = -500000;
 const MAX: i32 = 500000;
 const ASPIRATION_WINDOW: i32 = 25;
@@ -120,6 +120,7 @@ impl Engine {
                 // println!("Depth {} complete in {:?}", depth, start.elapsed());
             }
         }
+        // self.decay_history();
         if debug {
             let duration = start.elapsed();
             // println!("best score: {}", best_score);
